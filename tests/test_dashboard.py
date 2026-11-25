@@ -1,10 +1,14 @@
 ﻿import json
 import os
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
+
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDateTime, QTimeZone, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -1049,6 +1053,98 @@ def test_dashboard_resolves_local_whatsapp_contact_before_preview(tmp_path):
         assert "Maya Das (+919876543210)" in window.message_preview.toPlainText()
         assert service.preview(window._active_message_draft_id).recipient == contact.phone_e164
         assert window.send_message_button.isEnabled()
+    finally:
+        window.close()
+    assert app is not None
+
+
+@pytest.mark.parametrize(
+    ("operation", "worker_type"),
+    [("_save_provider_email_draft", _ProviderDraftWorker), ("_send_message_draft", _CommunicationSendWorker)],
+)
+@pytest.mark.parametrize("invalidate_during_review", [False, True])
+def test_dashboard_message_confirmation_shows_and_binds_exact_draft(
+    tmp_path, monkeypatch, operation, worker_type, invalidate_during_review
+):
+    app = QApplication.instance() or QApplication([])
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    attachment = tmp_path / "minutes.txt"
+    attachment.write_text("Meeting notes", encoding="utf-8")
+    service = CommunicationService(window.database, attachment_roots=(tmp_path,))
+    window._communications = service
+    body = "Keep the markup literal: <b>ready</b> & checked.\nSecond line."
+    draft = service.create_draft("email", "test@example.invalid", body, attachments=[attachment])
+    digest = service.preview(draft).digest
+    window._active_message_draft_id = draft
+    window._active_message_digest = digest
+    workers = []
+    window._run_worker = lambda worker, _callback: workers.append(worker)
+
+    def confirm(dialog):
+        assert dialog.textFormat() == Qt.TextFormat.PlainText
+        assert body in dialog.text()
+        assert "test@example.invalid" in dialog.text()
+        assert "minutes.txt" in dialog.text()
+        assert dialog.defaultButton() is dialog.button(QMessageBox.StandardButton.No)
+        if invalidate_during_review:
+            window.message_body.setPlainText("An edited draft")
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "exec", confirm)
+    try:
+        getattr(window, operation)()
+        assert service.status(draft) == "draft"
+        if invalidate_during_review:
+            assert workers == []
+            assert "draft changed" in window.status.text()
+        else:
+            assert len(workers) == 1
+            assert isinstance(workers[0], worker_type)
+            assert (workers[0].draft_id, workers[0].digest) == (draft, digest)
+    finally:
+        window.close()
+    assert app is not None
+
+
+def test_dashboard_manual_reminder_saves_qt_instant_and_displays_saved_zone(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    zone_name = "America/New_York"
+    picked = (datetime.now(timezone.utc) + timedelta(days=10)).replace(second=0, microsecond=0)
+    qt_zone = QTimeZone(zone_name.encode("ascii"))
+    monkeypatch.setattr(QTimeZone, "systemTimeZoneId", staticmethod(lambda: qt_zone.id()))
+    try:
+        window.reminder_due.setTimeZone(qt_zone)
+        window.reminder_due.setDateTime(QDateTime.fromMSecsSinceEpoch(int(picked.timestamp() * 1000), qt_zone))
+        window.reminder_text.setText("Review the minutes")
+        window._add_reminder()
+
+        row, = window.reminders.list_pending()
+        assert row["timezone"] == zone_name
+        assert datetime.fromisoformat(row["due_at"]) == picked
+        assert window.reminder_table.item(0, 0).text() == (
+            picked.astimezone(ZoneInfo(zone_name)).strftime("%Y-%m-%d %H:%M:%S %z")
+        )
+    finally:
+        window.close()
+    assert app is not None
+
+
+def test_dashboard_reminder_refuses_unknown_system_time_zone(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    messages = []
+    monkeypatch.setattr(QTimeZone, "systemTimeZoneId", staticmethod(lambda: b""))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append(args[-1]))
+    try:
+        window.reminder_text.setText("Review the minutes")
+        window.reminder_natural.setText("Take a break in 2 hours")
+        window._add_reminder()
+        window._add_natural_reminder()
+
+        assert not window.reminders.list_pending()
+        assert len(messages) == 2
+        assert all("local time zone is unavailable" in message for message in messages)
     finally:
         window.close()
     assert app is not None

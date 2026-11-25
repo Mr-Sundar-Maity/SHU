@@ -232,8 +232,11 @@ saving.
 The dashboard must be running to deliver scheduled reminders. If quiet mode is
 off, reminders are also spoken using the selected language's Edge TTS voice.
 Daily and weekly reminders start at their saved date and time, then recur in
-the selected timezone. Turning on Quiet mode before a queued notification
-reaches the dashboard suppresses its speech.
+the saved time zone. For later occurrences, SHU skips a nonexistent local
+time and uses the earlier occurrence of a repeated time. Dashboard reminders
+use the Windows time zone, and the pending list displays each reminder in its
+saved time zone with the UTC offset. Turning on Quiet mode before a queued
+notification reaches the dashboard suppresses its speech.
 
 When adding or correcting approved memories, SHU rejects known credential
 formats and common password assignments in its six supported languages.
@@ -318,7 +321,8 @@ Use `retry` only after confirming the uncertain action did not take effect;
 use `accept-complete` only after checking its result. Both commands require a
 typed `YES`. The former leaves a safe checkpoint for a separately reviewed
 `tasks resume`; the latter records a manual-review result and does not replay
-that step.
+that step. If the stored task changes while its resume or recovery review is
+open, SHU asks you to review the latest state before it proceeds.
 
 Task feedback is stored in the local audit trail only after an explicit review
 and confirmation. Credential-related correction text is rejected.

@@ -7,12 +7,12 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from database.database import Database
@@ -572,10 +572,17 @@ def parse_natural_reminder(
     return ParsedReminder(text, due, recurrence)
 
 
-def _validate_local_time(value: datetime) -> None:
+def _local_time_to_utc(value: datetime) -> datetime | None:
     # A wall time in a daylight-saving gap changes when round-tripped via UTC.
-    round_tripped = value.astimezone(timezone.utc).astimezone(value.tzinfo)
+    instant = value.astimezone(timezone.utc)
+    round_tripped = instant.astimezone(value.tzinfo)
     if round_tripped.replace(tzinfo=None) != value.replace(tzinfo=None):
+        return None
+    return instant
+
+
+def _validate_local_time(value: datetime) -> None:
+    if _local_time_to_utc(value) is None:
         raise ValueError("That local time does not exist because the clock changes. Choose a different time.")
 
 
@@ -585,6 +592,48 @@ def _next_weekday(current: datetime, weekday: int, due_time: time) -> datetime:
     if due.astimezone(timezone.utc) <= current.astimezone(timezone.utc):
         due += timedelta(days=7)
     return due
+
+
+class _CalendarReminderTrigger(BaseTrigger):
+    """Fire on local calendar dates. Skip gaps and use the earlier fold once.
+
+    The stored first occurrence is an exact instant and can select either fold.
+    All comparisons and returned fire times use UTC so repeated wall times
+    cannot confuse the scheduler's ordering.
+    """
+
+    def __init__(self, first: datetime, zone: ZoneInfo, *, interval_days: int) -> None:
+        self.first = first.astimezone(timezone.utc)
+        self.zone = zone
+        local_first = self.first.astimezone(zone)
+        self.first_date = local_first.date()
+        self.wall_time = local_first.timetz().replace(fold=0)
+        self.interval = timedelta(days=interval_days)
+
+    def get_next_fire_time(
+        self, previous_fire_time: datetime | None, now: datetime,
+    ) -> datetime | None:
+        # On restart, skip missed occurrences. While running, APScheduler
+        # handles elapsed occurrences and misfires from the previous fire time.
+        earliest = (previous_fire_time or now).astimezone(timezone.utc)
+        local_date = earliest.astimezone(self.zone).date()
+        intervals = max(0, (local_date - self.first_date) // self.interval)
+        candidate_date = self.first_date + intervals * self.interval
+        while True:
+            if candidate_date == self.first_date:
+                candidate = self.first
+            else:
+                try:
+                    candidate = _local_time_to_utc(datetime.combine(candidate_date, self.wall_time))
+                except OverflowError:
+                    return None
+            if candidate is not None and (
+                candidate > earliest or (previous_fire_time is None and candidate == earliest)
+            ):
+                return candidate
+            if date.max - candidate_date < self.interval:
+                return None
+            candidate_date += self.interval
 
 
 class ReminderService:
@@ -684,7 +733,7 @@ class ReminderService:
                 due = due.replace(tzinfo=timezone.utc)
             if row["recurrence"] in {"daily", "weekly"}:
                 # The stored due_at is the first occurrence. After a restart
-                # it will usually be in the past; the cron trigger still knows
+                # it will usually be in the past; the calendar trigger still knows
                 # how to schedule the next future occurrence from its time.
                 self._schedule(row["reminder_id"])
             elif due <= now:
@@ -775,17 +824,12 @@ class ReminderService:
             trigger = DateTrigger(run_date=datetime.now(timezone.utc))
         elif row["recurrence"] in {"daily", "weekly"}:
             zone = self._zone(row["timezone"])
-            local_due = datetime.fromisoformat(row["due_at"]).astimezone(zone)
-            options = {
-                "start_date": local_due,
-                "hour": local_due.hour,
-                "minute": local_due.minute,
-                "second": local_due.second,
-                "timezone": zone,
-            }
-            if row["recurrence"] == "weekly":
-                options["day_of_week"] = local_due.weekday()
-            trigger = CronTrigger(**options)
+            first = datetime.fromisoformat(row["due_at"])
+            if first.tzinfo is None:
+                first = first.replace(tzinfo=timezone.utc)
+            trigger = _CalendarReminderTrigger(
+                first, zone, interval_days=7 if row["recurrence"] == "weekly" else 1,
+            )
         else:
             trigger = DateTrigger(run_date=datetime.fromisoformat(row["due_at"]))
 

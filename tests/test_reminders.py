@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
-from apscheduler.triggers.cron import CronTrigger
 
 from app.notifications.reminders import ReminderService, parse_natural_reminder
 from database.database import Database
@@ -62,16 +61,21 @@ def test_recurring_reminders_resume_at_the_next_future_occurrence_after_restart(
 
         assert overdue == []
         assert job is not None
-        assert isinstance(job.trigger, CronTrigger)
         assert job.next_run_time > datetime.now(timezone.utc)
+        interval = timedelta(days=1 if recurrence == "daily" else 7)
+        assert job.trigger.get_next_fire_time(job.next_run_time, job.next_run_time) == (
+            job.next_run_time + interval
+        )
 
         # Even if a caller explicitly reviews a recurring item, it resumes
         # its recurrence instead of becoming a one-shot immediate job.
         service.confirm_overdue(reminder_id, still_relevant=True)
         resumed = service.scheduler.get_job(reminder_id)
         assert resumed is not None
-        assert isinstance(resumed.trigger, CronTrigger)
         assert resumed.next_run_time > datetime.now(timezone.utc)
+        assert resumed.trigger.get_next_fire_time(resumed.next_run_time, resumed.next_run_time) == (
+            resumed.next_run_time + interval
+        )
     finally:
         service.shutdown()
 
@@ -96,6 +100,74 @@ def test_recurrence_respects_the_stored_first_occurrence(tmp_path, recurrence):
         assert job.next_run_time == due
     finally:
         service.shutdown()
+
+
+@pytest.mark.parametrize(("recurrence", "days"), [("daily", 1), ("weekly", 7)])
+def test_recurrence_delivers_once_in_a_repeated_dst_hour(tmp_path, recurrence, days):
+    zone = ZoneInfo("America/New_York")
+    repeated = datetime(2026, 11, 1, 1, 30, 37, tzinfo=zone)
+    first = repeated - timedelta(days=days)
+    following = (repeated + timedelta(days=days)).astimezone(timezone.utc)
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    service = ReminderService(database)
+    reminder_id = service.create("Recurring reminder", first, timezone_name=zone.key, recurrence=recurrence)
+    service._schedule(reminder_id)
+    trigger = service.scheduler.get_job(reminder_id).trigger
+
+    # When already running, the scheduler must still see the first fold as a
+    # possible misfire even if its polling resumes during the second fold.
+    first_fold = trigger.get_next_fire_time(first, repeated.replace(fold=1))
+    assert first_fold.astimezone(timezone.utc) == repeated.astimezone(timezone.utc)
+    assert trigger.get_next_fire_time(first_fold, first_fold) == following
+    # Restart between the two occurrences. The default first fold is already past.
+    restarted_at = repeated.replace(minute=15, fold=1)
+    assert trigger.get_next_fire_time(None, restarted_at) == following
+
+
+@pytest.mark.parametrize(("recurrence", "days"), [("daily", 1), ("weekly", 7)])
+def test_recurrence_skips_nonexistent_dst_time_without_shifting(tmp_path, recurrence, days):
+    zone = ZoneInfo("America/New_York")
+    gap = datetime(2026, 3, 8, 2, 30, 37, tzinfo=zone)
+    first = gap - timedelta(days=days)
+    following = (gap + timedelta(days=days)).astimezone(timezone.utc)
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    service = ReminderService(database)
+    reminder_id = service.create("Recurring reminder", first, timezone_name=zone.key, recurrence=recurrence)
+    service._schedule(reminder_id)
+    trigger = service.scheduler.get_job(reminder_id).trigger
+
+    assert trigger.get_next_fire_time(first, first) == following
+    assert trigger.get_next_fire_time(None, gap.replace(hour=1)) == following
+
+
+def test_recurrence_keeps_explicit_second_fold_as_first_occurrence(tmp_path):
+    zone = ZoneInfo("America/New_York")
+    first = datetime(2026, 11, 1, 1, 30, tzinfo=zone, fold=1)
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    service = ReminderService(database)
+    reminder_id = service.create("Recurring reminder", first, timezone_name=zone.key, recurrence="daily")
+    service._schedule(reminder_id)
+    trigger = service.scheduler.get_job(reminder_id).trigger
+
+    before_first = first.replace(minute=15, fold=0)
+    assert trigger.get_next_fire_time(None, before_first) == first.astimezone(timezone.utc)
+
+
+def test_daily_recurrence_skips_a_whole_nonexistent_local_date(tmp_path):
+    zone = ZoneInfo("Pacific/Apia")
+    first = datetime(2011, 12, 29, 9, tzinfo=zone)
+    following = datetime(2011, 12, 31, 9, tzinfo=zone).astimezone(timezone.utc)
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    service = ReminderService(database)
+    reminder_id = service.create("Recurring reminder", first, timezone_name=zone.key, recurrence="daily")
+    service._schedule(reminder_id)
+    trigger = service.scheduler.get_job(reminder_id).trigger
+
+    assert trigger.get_next_fire_time(first, first) == following
 
 
 @pytest.mark.parametrize(

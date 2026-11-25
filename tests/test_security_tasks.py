@@ -932,6 +932,53 @@ def test_accepting_interrupted_final_step_requires_manual_review_and_stops_repla
         executor.resume(task_id)
 
 
+def test_interrupted_resolution_checks_snapshot_at_write(tmp_path, monkeypatch):
+    database, registry = make_registry(tmp_path)
+    planner = TaskPlanner(database, registry)
+    executor = TaskExecutor(database, planner, registry)
+    task_id = planner.create(
+        "read test value",
+        [{"tool": "read_value", "arguments": {"key": "x"}}],
+    )
+    with database.connect() as connection:
+        with connection:
+            connection.execute(
+                "UPDATE tasks SET status='interrupted',inflight_step=1 WHERE task_id=?",
+                (task_id,),
+            )
+    preview = executor.preview_interrupted(task_id)
+    original_read = executor._interrupted_state
+
+    def change_after_read(task_id):
+        state = original_read(task_id)
+        with database.connect() as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE tasks SET request=? WHERE task_id=?",
+                    ("read revised value", task_id),
+                )
+        return state
+
+    monkeypatch.setattr(executor, "_interrupted_state", change_after_read)
+    with pytest.raises(ValueError, match="Interrupted task changed"):
+        executor.resolve_interrupted(
+            task_id,
+            action="accept_complete",
+            approved=True,
+            expected_review_digest=preview["review_digest"],
+        )
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT request,status,inflight_step FROM tasks WHERE task_id=?", (task_id,)
+        ).fetchone()
+        review_events = connection.execute(
+            "SELECT COUNT(*) FROM audit_logs WHERE task_id=? AND tool='resolve_interrupted_task'",
+            (task_id,),
+        ).fetchone()[0]
+    assert tuple(row) == ("read revised value", "interrupted", 1)
+    assert review_events == 0
+
+
 def test_reconciliation_does_not_mark_a_live_runner_as_orphaned(tmp_path):
     database, registry = make_registry(tmp_path)
     planner = TaskPlanner(database, registry)

@@ -505,6 +505,146 @@ def test_run_next_refuses_a_plan_changed_after_preview(monkeypatch, tmp_path, ca
     assert "could not run: ValueError" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("change", ["checkpoint", "plan", "request"])
+def test_task_resume_requires_a_new_review_when_the_saved_task_changes(
+    monkeypatch, tmp_path, capsys, change
+):
+    from app import cli
+    from app.security.policy import RiskLevel
+    from app.security.registry import ToolRegistry, ToolSpec
+    from app.tasks.executor import TaskExecutor
+    from app.tasks.planner import TaskPlanner
+
+    database = Database(tmp_path / "cli-resume.db")
+    database.initialize()
+    registry = ToolRegistry(database)
+    calls = []
+
+    def read_value(key):
+        calls.append(key)
+        if key == "first" or (key == "second" and change == "checkpoint"):
+            registry.emergency_stop.trigger()
+        return key
+
+    registry.register(
+        ToolSpec(
+            name="read_value",
+            description="Read a test value",
+            risk=RiskLevel.READ_ONLY,
+            handler=read_value,
+            validator=lambda args: {"key": args["key"]},
+        )
+    )
+    planner = TaskPlanner(database, registry)
+    steps = [
+        {"tool": "read_value", "arguments": {"key": key}}
+        for key in ("first", "second", "third")
+    ]
+    task_id = planner.create("Read three values", steps)
+    executor = TaskExecutor(database, planner, registry)
+    assert executor.execute(task_id)["status"] == "partially_completed"
+    registry.emergency_stop.reset()
+    monkeypatch.setattr(cli, "_task_services", lambda: (planner, executor))
+
+    def approve_after_change(_prompt):
+        assert '"key": "second"' in capsys.readouterr().out
+        if change == "checkpoint":
+            competing_executor = TaskExecutor(database, planner, registry)
+            assert competing_executor.resume(task_id)["status"] == "partially_completed"
+            registry.emergency_stop.reset()
+        else:
+            with database.connect() as connection:
+                with connection:
+                    if change == "plan":
+                        steps[1] = {"tool": "read_value", "arguments": {"key": "replacement"}}
+                        connection.execute(
+                            "UPDATE tasks SET plan_json=? WHERE task_id=?",
+                            (json.dumps(planner.validate_steps(steps)), task_id),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE tasks SET request=? WHERE task_id=?",
+                            ("Read a revised request", task_id),
+                        )
+        return "YES"
+
+    monkeypatch.setattr("builtins.input", approve_after_change)
+    assert cli.task_resume(task_id, confirmed=True) == 1
+    assert "Review the current task status and remaining steps" in capsys.readouterr().out
+    assert calls == (["first", "second"] if change == "checkpoint" else ["first"])
+    assert planner.preview(task_id)["status"] == "partially_completed"
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "YES")
+    assert cli.task_resume(task_id, confirmed=True) == 0
+    expected_second = "replacement" if change == "plan" else "second"
+    assert calls == ["first", expected_second, "third"]
+
+
+@pytest.mark.parametrize(
+    ("action", "final_status"),
+    [("retry", "cancelled"), ("accept-complete", "completed_manual_review")],
+)
+def test_task_recover_refuses_to_apply_an_old_confirmation_to_a_new_uncertain_step(
+    monkeypatch, tmp_path, capsys, action, final_status
+):
+    from app import cli
+    from app.security.policy import RiskLevel
+    from app.security.registry import ToolRegistry, ToolSpec
+    from app.tasks.executor import TaskExecutor
+    from app.tasks.planner import TaskPlanner
+
+    database = Database(tmp_path / "cli-interrupted.db")
+    database.initialize()
+    registry = ToolRegistry(database)
+    calls = []
+    registry.register(
+        ToolSpec(
+            name="read_value",
+            description="Read a test value",
+            risk=RiskLevel.READ_ONLY,
+            handler=lambda key: calls.append(key),
+            validator=lambda args: {"key": args["key"]},
+        )
+    )
+    planner = TaskPlanner(database, registry)
+    task_id = planner.create(
+        "Review the uncertain value",
+        [
+            {"tool": "read_value", "arguments": {"key": "first"}},
+            {"tool": "read_value", "arguments": {"key": "second"}},
+        ],
+    )
+    executor = TaskExecutor(database, planner, registry)
+    monkeypatch.setattr(cli, "_task_services", lambda: (planner, executor))
+    with database.connect() as connection:
+        with connection:
+            connection.execute(
+                "UPDATE tasks SET status='interrupted',inflight_step=1 WHERE task_id=?",
+                (task_id,),
+            )
+
+    def approve_after_step_changes(_prompt):
+        assert "Uncertain step 1:" in capsys.readouterr().out
+        with database.connect() as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE tasks SET inflight_step=2,checkpoint_json=? WHERE task_id=?",
+                    (json.dumps([{"step": 1, "status": "verified", "tool": "read_value"}]), task_id),
+                )
+        return "YES"
+
+    monkeypatch.setattr("builtins.input", approve_after_step_changes)
+    assert cli.task_recover(task_id, action, confirmed=True) == 1
+    assert "Interrupted task changed after review" in capsys.readouterr().out
+    assert executor.preview_interrupted(task_id)["uncertain_step_number"] == 2
+    assert calls == []
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "YES")
+    assert cli.task_recover(task_id, action, confirmed=True) == 0
+    assert planner.preview(task_id)["status"] == final_status
+    assert calls == []
+
+
 def test_whatsapp_contact_resolution_requires_explicit_duplicate_choice(tmp_path):
     database = Database(tmp_path / "shu.db")
     database.initialize()

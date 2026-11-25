@@ -860,6 +860,7 @@ def task_recover(task_id: str, action: str, *, confirmed: bool) -> int:
             task_id,
             action="accept_complete" if action == "accept-complete" else action,
             approved=True,
+            expected_review_digest=preview["review_digest"],
         )
     except Exception as error:
         print("Recovery decision was not recorded:", str(error))
@@ -871,7 +872,7 @@ def task_recover(task_id: str, action: str, *, confirmed: bool) -> int:
 
 
 def task_resume(task_id: str, *, confirmed: bool) -> int:
-    planner, executor = _task_services()
+    _planner, executor = _task_services()
     try:
         preview = executor.preview_resume(task_id)
     except Exception as error:
@@ -888,9 +889,14 @@ def task_resume(task_id: str, *, confirmed: bool) -> int:
         print("Task was not resumed.")
         return 2
     try:
-        report = executor.resume(task_id, confirm=lambda *_args: True)
+        report = executor.resume(
+            task_id,
+            confirm=lambda *_args: True,
+            expected_review_digest=preview["review_digest"],
+        )
     except Exception as error:
         print("Task resume failed:", type(error).__name__)
+        print("Review the current task status and remaining steps before trying again.")
         return 1
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["status"] == "completed" else 1

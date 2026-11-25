@@ -6,11 +6,12 @@ import json
 import sys
 import time
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from PySide6.QtCore import QObject, QDateTime, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QDateTime, QThread, QTimer, QTimeZone, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -516,7 +517,8 @@ class SHUDashboard(QMainWindow):
         layout.addWidget(self.quiet_mode)
         self.reminder_table = QTableWidget(0, 3)
         self.reminder_table.setAccessibleName("Pending reminders")
-        self.reminder_table.setHorizontalHeaderLabels(["Due", "Reminder", "ID"])
+        self.reminder_table.setHorizontalHeaderLabels(["Due (saved time zone)", "Reminder", "ID"])
+        self.reminder_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.reminder_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.reminder_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.reminder_table)
@@ -901,14 +903,7 @@ class SHUDashboard(QMainWindow):
                if preview.attachments else "")
             + "\n\nSave this exact email to the provider's Drafts folder? No message will be sent."
         )
-        answer = QMessageBox.question(
-            self,
-            "Confirm provider draft",
-            exact_preview,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        if not self._confirm_message_preview("Confirm provider draft", exact_preview, draft_id, digest):
             return
         self._set_communication_inputs_enabled(False)
         self.save_provider_draft_button.setEnabled(False)
@@ -958,20 +953,16 @@ class SHUDashboard(QMainWindow):
                 else f"{preview.recipient}\n"
             )
             + (f"Subject: {preview.subject}\n" if preview.subject else "")
-            + f"\n{preview.body}\n\nSend this exact message?"
+            + f"\n{preview.body}"
+            + ("\n\nAttachments:\n" + json.dumps(preview.attachments, ensure_ascii=False, indent=2)
+               if preview.attachments else "")
+            + "\n\nSend this exact message?"
         )
         if preview.digest != digest:
             QMessageBox.warning(self, "Draft changed", "Review and create a fresh preview before sending.")
             self._invalidate_message_preview()
             return
-        answer = QMessageBox.question(
-            self,
-            "Confirm message delivery",
-            exact_preview,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        if not self._confirm_message_preview("Confirm message delivery", exact_preview, draft_id, digest):
             return
         self._set_communication_inputs_enabled(False)
         self.send_message_button.setEnabled(False)
@@ -980,6 +971,20 @@ class SHUDashboard(QMainWindow):
             _CommunicationSendWorker(self._communication_service(), draft_id, digest),
             self._message_send_finished,
         )
+
+    def _confirm_message_preview(self, title: str, text: str, draft_id: str, digest: str) -> bool:
+        confirmation = QMessageBox(self)
+        confirmation.setWindowTitle(title)
+        confirmation.setTextFormat(Qt.TextFormat.PlainText)
+        confirmation.setText(text)
+        confirmation.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        confirmation.setDefaultButton(QMessageBox.StandardButton.No)
+        if confirmation.exec() != QMessageBox.StandardButton.Yes or self._closing:
+            return False
+        if (draft_id, digest) != (self._active_message_draft_id, self._active_message_digest):
+            self.status.setText("The message draft changed. Create and review a new preview.")
+            return False
+        return True
 
     @Slot(str, str)
     def _message_send_finished(self, provider_id: str, error: str) -> None:
@@ -2087,9 +2092,13 @@ class SHUDashboard(QMainWindow):
         text = self.reminder_text.text().strip()
         if not text:
             return
-        due = self.reminder_due.dateTime().toPython()
         try:
-            self.reminders.create(text, due, timezone_name=self._local_timezone())
+            timezone_name = self._local_timezone()
+            selected = self.reminder_due.dateTime()
+            if not selected.isValid():
+                raise ValueError("Choose a valid local date and time.")
+            due = datetime.fromtimestamp(selected.toMSecsSinceEpoch() / 1000, tz=timezone.utc)
+            self.reminders.create(text, due, timezone_name=timezone_name)
             self.reminder_text.clear()
             self._refresh_reminders()
         except Exception as error:
@@ -2099,8 +2108,8 @@ class SHUDashboard(QMainWindow):
         request = self.reminder_natural.text().strip()
         if not request:
             return
-        timezone_name = self._local_timezone()
         try:
+            timezone_name = self._local_timezone()
             parsed = parse_natural_reminder(
                 request,
                 timezone_name=timezone_name,
@@ -2195,7 +2204,15 @@ class SHUDashboard(QMainWindow):
         rows = self.reminders.list_pending()
         self.reminder_table.setRowCount(len(rows))
         for index, reminder in enumerate(rows):
-            self.reminder_table.setItem(index, 0, QTableWidgetItem(reminder["due_at"]))
+            due_label = reminder["due_at"]
+            try:
+                due = datetime.fromisoformat(due_label)
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                due_label = due.astimezone(ZoneInfo(reminder["timezone"])).strftime("%Y-%m-%d %H:%M:%S %z")
+            except (ValueError, ZoneInfoNotFoundError):
+                pass
+            self.reminder_table.setItem(index, 0, QTableWidgetItem(due_label))
             self.reminder_table.setItem(index, 1, QTableWidgetItem(reminder["text"]))
             self.reminder_table.setItem(index, 2, QTableWidgetItem(reminder["reminder_id"]))
 
@@ -2252,8 +2269,12 @@ class SHUDashboard(QMainWindow):
 
     @staticmethod
     def _local_timezone() -> str:
-        tz = datetime.now().astimezone().tzinfo
-        return getattr(tz, "key", None) or "Asia/Kolkata"
+        try:
+            timezone_name = bytes(QTimeZone.systemTimeZoneId()).decode("ascii")
+            ZoneInfo(timezone_name)
+        except (ValueError, ZoneInfoNotFoundError) as error:
+            raise ValueError("Windows local time zone is unavailable. Choose a time zone in Windows Settings.") from error
+        return timezone_name
 
     def closeEvent(self, event) -> None:
         if not self._closing:

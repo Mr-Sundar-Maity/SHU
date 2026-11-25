@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import errno
+import hashlib
+import hmac
 import json
 import os
+import sqlite3
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +22,24 @@ from database.database import Database
 Verifier = Callable[[Any, dict[str, Any]], bool]
 _RETRY_BACKOFF_BASE_SECONDS = 0.5
 _RETRY_BACKOFF_MAX_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class _RecoveryState:
+    request: str
+    status: str
+    steps: list[dict[str, Any]]
+    plan_json: str
+    checkpoint_json: str
+    completed: list[dict[str, Any]]
+    step_index: int
+
+    def review_digest(self, task_id: str) -> str:
+        snapshot = (
+            task_id, self.request, self.status, self.plan_json,
+            self.checkpoint_json, self.step_index, self.steps,
+        )
+        return hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
 
 
 class TaskExecutor:
@@ -92,6 +114,18 @@ class TaskExecutor:
 
     def preview_interrupted(self, task_id: str) -> dict[str, Any]:
         """Expose the uncertain step so a person can inspect it before recovery."""
+        state = self._interrupted_state(task_id)
+        return {
+            "task_id": task_id,
+            "request": state.request,
+            "completed": state.completed,
+            "uncertain_step_number": state.step_index + 1,
+            "uncertain_step": state.steps[state.step_index],
+            "remaining_after_uncertain_step": state.steps[state.step_index + 1:],
+            "review_digest": state.review_digest(task_id),
+        }
+
+    def _task_recovery_row(self, task_id: str) -> sqlite3.Row:
         with self.database.connect() as connection:
             row = connection.execute(
                 "SELECT request,status,plan_json,checkpoint_json,inflight_step FROM tasks WHERE task_id=?",
@@ -99,6 +133,10 @@ class TaskExecutor:
             ).fetchone()
         if row is None:
             raise KeyError("Task not found")
+        return row
+
+    def _interrupted_state(self, task_id: str) -> _RecoveryState:
+        row = self._task_recovery_row(task_id)
         if row["status"] != "interrupted":
             raise ValueError("Task is not awaiting interrupted-task review")
         steps = self.planner.validate_steps(json.loads(row["plan_json"]))
@@ -120,14 +158,15 @@ class TaskExecutor:
             for index, item in enumerate(completed, start=1)
         ):
             raise ValueError("The task checkpoint does not have a verified prefix")
-        return {
-            "task_id": task_id,
-            "request": row["request"],
-            "completed": completed,
-            "uncertain_step_number": uncertain_step,
-            "uncertain_step": steps[uncertain_step - 1],
-            "remaining_after_uncertain_step": steps[uncertain_step:],
-        }
+        return _RecoveryState(
+            request=row["request"],
+            status=row["status"],
+            steps=steps,
+            plan_json=row["plan_json"],
+            checkpoint_json=row["checkpoint_json"],
+            completed=completed,
+            step_index=uncertain_step - 1,
+        )
 
     def resolve_interrupted(
         self,
@@ -135,17 +174,21 @@ class TaskExecutor:
         *,
         action: str,
         approved: bool = False,
+        expected_review_digest: str | None = None,
     ) -> dict[str, Any]:
         """Record a human-reviewed outcome without automatically running work."""
         if not approved:
             raise PermissionError("Resolving an interrupted task requires explicit approval")
         if action not in {"retry", "accept_complete"}:
             raise ValueError("action must be retry or accept_complete")
-        preview = self.preview_interrupted(task_id)
-        step_number = preview["uncertain_step_number"]
-        steps = self.planner.get_steps(task_id)
-        checkpoint = list(preview["completed"])
-        current_tool = preview["uncertain_step"]["tool"]
+        state = self._interrupted_state(task_id)
+        if expected_review_digest is not None and not hmac.compare_digest(
+            expected_review_digest, state.review_digest(task_id)
+        ):
+            raise ValueError("Interrupted task changed after review; preview it again")
+        step_number = state.step_index + 1
+        checkpoint = list(state.completed)
+        current_tool = state.steps[state.step_index]["tool"]
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         if action == "retry":
             checkpoint.append(
@@ -165,7 +208,7 @@ class TaskExecutor:
                     "verification": "user_reviewed_after_interruption",
                 }
             )
-            if step_number < len(steps):
+            if step_number < len(state.steps):
                 checkpoint.append(
                     {
                         "step": step_number + 1,
@@ -180,16 +223,21 @@ class TaskExecutor:
             with connection:
                 cursor = connection.execute(
                     "UPDATE tasks SET status=?,checkpoint_json=?,finished_at=?,runner_pid=NULL,inflight_step=NULL "
-                    "WHERE task_id=? AND status='interrupted'",
+                    "WHERE task_id=? AND status='interrupted' AND request=? "
+                    "AND plan_json=? AND checkpoint_json=? AND inflight_step=?",
                     (
                         status,
                         json.dumps(checkpoint),
                         now if status == "completed_manual_review" else None,
                         task_id,
+                        state.request,
+                        state.plan_json,
+                        state.checkpoint_json,
+                        step_number,
                     ),
                 )
                 if cursor.rowcount != 1:
-                    raise ValueError("Task is no longer awaiting interrupted-task review")
+                    raise ValueError("Interrupted task changed or is no longer awaiting review")
                 connection.execute(
                     "INSERT INTO audit_logs(log_id,task_id,actor,tool,action_summary,risk,approval,result,timestamp) "
                     "VALUES(?,?,?,?,?,?,?,?,?)",
@@ -222,10 +270,17 @@ class TaskExecutor:
         on_progress: Callable[[int, int, str, str], None] | None = None,
         expected_request: str | None = None,
         expected_steps: list[dict[str, Any]] | None = None,
+        expected_resume_digest: str | None = None,
     ) -> dict[str, Any]:
-        steps = self.planner.get_steps(task_id)
         if not self.registry.automation_enabled:
             raise PermissionError("SHU automation is disabled; task remains queued")
+        recovery = self._resume_state(task_id) if resume else None
+        steps = recovery.steps if recovery is not None else self.planner.get_steps(task_id)
+        if expected_resume_digest is not None and (
+            recovery is None
+            or not hmac.compare_digest(expected_resume_digest, recovery.review_digest(task_id))
+        ):
+            raise ValueError("Task recovery changed after review; preview it again")
         if expected_steps is not None:
             reviewed_steps = self.planner.validate_steps(expected_steps)
             if steps != reviewed_steps:
@@ -234,16 +289,18 @@ class TaskExecutor:
             verifier_name = step["verify"]
             if verifier_name and verifier_name not in self.verifiers:
                 raise ValueError(f"Verifier is not registered: {verifier_name}")
-        if resume:
-            completed, start_index, checkpoint_json = self._recovery_state(task_id, steps)
+        if recovery is not None:
+            if expected_request is not None and expected_request != recovery.request:
+                raise ValueError("Task request changed after review; preview it again")
             self._claim_task(
                 task_id,
-                allowed_statuses=("cancelled", "partially_completed"),
-                expected_request=expected_request,
-                expected_steps=steps if expected_steps is not None else None,
-                expected_checkpoint_json=checkpoint_json,
+                allowed_statuses=(recovery.status,),
+                expected_request=recovery.request,
+                expected_plan_json=recovery.plan_json,
+                expected_checkpoint_json=recovery.checkpoint_json,
             )
-            results = list(completed)
+            results = list(recovery.completed)
+            start_index = recovery.step_index
         else:
             self._claim_task(
                 task_id,
@@ -384,18 +441,14 @@ class TaskExecutor:
 
     def preview_resume(self, task_id: str) -> dict[str, Any]:
         """Return verified completed steps and the safe unstarted suffix."""
-        steps = self.planner.get_steps(task_id)
-        completed, start_index, _checkpoint_json = self._recovery_state(task_id, steps)
-        with self.database.connect() as connection:
-            row = connection.execute(
-                "SELECT request FROM tasks WHERE task_id=?", (task_id,)
-            ).fetchone()
+        recovery = self._resume_state(task_id)
         return {
             "task_id": task_id,
-            "request": row["request"],
-            "completed": list(completed),
-            "resume_from_step": start_index + 1,
-            "remaining": steps[start_index:],
+            "request": recovery.request,
+            "completed": recovery.completed,
+            "resume_from_step": recovery.step_index + 1,
+            "remaining": recovery.steps[recovery.step_index:],
+            "review_digest": recovery.review_digest(task_id),
         }
 
     def resume(
@@ -403,23 +456,18 @@ class TaskExecutor:
         task_id: str,
         *,
         confirm: Confirmation | None = None,
+        expected_review_digest: str | None = None,
     ) -> dict[str, Any]:
         """Continue only after a stop between verified steps; never replay failure."""
-        return self.execute(task_id, confirm=confirm, resume=True)
+        return self.execute(
+            task_id, confirm=confirm, resume=True, expected_resume_digest=expected_review_digest
+        )
 
-    def _recovery_state(
-        self,
-        task_id: str,
-        steps: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], int, str]:
-        with self.database.connect() as connection:
-            row = connection.execute(
-                "SELECT status,checkpoint_json FROM tasks WHERE task_id=?", (task_id,)
-            ).fetchone()
-        if row is None:
-            raise KeyError("Task not found")
-        if row["status"] not in {"cancelled", "partially_completed"}:
+    def _resume_state(self, task_id: str) -> _RecoveryState:
+        row = self._task_recovery_row(task_id)
+        if row["status"] not in {"cancelled", "partially_completed"} or row["inflight_step"] is not None:
             raise ValueError("Only a task stopped between steps can be resumed")
+        steps = self.planner.validate_steps(json.loads(row["plan_json"]))
         try:
             checkpoint = json.loads(row["checkpoint_json"])
         except json.JSONDecodeError as error:
@@ -442,7 +490,15 @@ class TaskExecutor:
             for index, item in enumerate(completed, start=1)
         ):
             raise ValueError("Only a verified completed prefix can be resumed")
-        return completed, step_number - 1, row["checkpoint_json"]
+        return _RecoveryState(
+            request=row["request"],
+            status=row["status"],
+            steps=steps,
+            plan_json=row["plan_json"],
+            checkpoint_json=row["checkpoint_json"],
+            completed=completed,
+            step_index=step_number - 1,
+        )
 
     def _claim_task(
         self,
@@ -451,14 +507,16 @@ class TaskExecutor:
         allowed_statuses: tuple[str, ...],
         expected_request: str | None = None,
         expected_steps: list[dict[str, Any]] | None = None,
+        expected_plan_json: str | None = None,
         expected_checkpoint_json: str | None = None,
     ) -> None:
         placeholders = ",".join("?" for _ in allowed_statuses)
         with self.database.connect() as connection:
             with connection:
-                expected_plan_json = None
                 request_guard = expected_request
-                if expected_steps is not None or expected_request is not None:
+                if expected_plan_json is None and (
+                    expected_steps is not None or expected_request is not None
+                ):
                     row = connection.execute(
                         "SELECT request,plan_json FROM tasks WHERE task_id=?",
                         (task_id,),
@@ -475,7 +533,10 @@ class TaskExecutor:
 
                 plan_condition = " AND plan_json=?" if expected_plan_json is not None else ""
                 request_condition = " AND request=?" if request_guard is not None else ""
-                checkpoint_condition = " AND checkpoint_json=?" if expected_checkpoint_json is not None else ""
+                checkpoint_condition = (
+                    " AND checkpoint_json=? AND inflight_step IS NULL"
+                    if expected_checkpoint_json is not None else ""
+                )
                 cursor = connection.execute(
                     f"UPDATE tasks SET status='running', finished_at=NULL,runner_pid=?,inflight_step=NULL "
                     f"WHERE task_id=? AND status IN ({placeholders})"
