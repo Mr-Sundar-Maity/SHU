@@ -1,0 +1,57 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install dependencies
+        run: .\.venv\Scripts\python.exe -m pip install --no-input -r requirements.txt -r requirements-v1.txt
+
+      - name: Check dependencies
+        run: .\.venv\Scripts\python.exe -m pip check
+
+      - name: Compile application modules
+        run: .\.venv\Scripts\python.exe -m compileall -q app database memory
+
+      - name: Run automated tests
+        env:
+          SHU_DATA_DIR: ${{ runner.temp }}/shu-ci-data
+        run: .\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Initialize isolated database
+        env:
+          SHU_DATA_DIR: ${{ runner.temp }}/shu-ci-data
+        run: .\.venv\Scripts\python.exe -m app.cli db init
+
+      - name: Verify isolated database
+        env:
+          SHU_DATA_DIR: ${{ runner.temp }}/shu-ci-data
+        run: .\.venv\Scripts\python.exe -m app.cli db verify
