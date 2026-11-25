@@ -747,6 +747,43 @@ def test_executor_resumes_only_after_verified_prefix(tmp_path):
     assert calls == ["first", "second"]
 
 
+def test_resume_refuses_checkpoint_advanced_by_another_runner(tmp_path, monkeypatch):
+    database, registry = make_registry(tmp_path)
+    planner = TaskPlanner(database, registry)
+    calls = []
+
+    def read_value(key):
+        calls.append(key)
+        if key in {"first", "second"}:
+            registry.emergency_stop.trigger()
+        return key
+
+    registry._tools["read_value"] = replace(registry._tools["read_value"], handler=read_value)
+    task_id = planner.create(
+        "run three steps",
+        [{"tool": "read_value", "arguments": {"key": key}} for key in ("first", "second", "third")],
+    )
+    waiting_runner = TaskExecutor(database, planner, registry)
+    competing_runner = TaskExecutor(database, planner, registry)
+    assert competing_runner.execute(task_id)["status"] == "partially_completed"
+    registry.emergency_stop.reset()
+
+    original_claim = waiting_runner._claim_task
+
+    def advance_before_claim(*args, **kwargs):
+        assert competing_runner.resume(task_id)["status"] == "partially_completed"
+        registry.emergency_stop.reset()
+        return original_claim(*args, **kwargs)
+
+    monkeypatch.setattr(waiting_runner, "_claim_task", advance_before_claim)
+    with pytest.raises(ValueError, match="checkpoint changed"):
+        waiting_runner.resume(task_id)
+
+    assert competing_runner.preview_resume(task_id)["resume_from_step"] == 3
+    assert competing_runner.resume(task_id)["status"] == "completed"
+    assert calls == ["first", "second", "third"]
+
+
 def test_emergency_stop_during_active_tool_blocks_following_step(tmp_path):
     database = Database(tmp_path / "stop-under-load.db")
     database.initialize()
@@ -942,3 +979,60 @@ def test_task_left_in_flight_by_a_terminated_process_requires_manual_recovery(tm
     assert recovered == [{"task_id": task_id, "status": "interrupted", "uncertain_step": 1}]
     preview = executor.preview_interrupted(task_id)
     assert preview["uncertain_step"]["tool"] == "read_value"
+
+
+def test_crash_inside_resumed_step_cannot_reuse_its_old_cancelled_checkpoint(tmp_path):
+    database, registry = make_registry(tmp_path)
+    registry._tools["modify_value"] = replace(
+        registry._tools["modify_value"], verifier=lambda value, args: value == f"updated:{args['key']}"
+    )
+    planner = TaskPlanner(database, registry)
+    task_id = planner.create(
+        "modify a test file",
+        [{"tool": "modify_value", "arguments": {"key": "synthetic"}}],
+    )
+    executor = TaskExecutor(database, planner, registry)
+    registry.emergency_stop.trigger()
+    assert executor.execute(task_id)["status"] == "cancelled"
+    registry.emergency_stop.reset()
+    marker = tmp_path / "synthetic-side-effect.txt"
+    script = """
+import os
+import sys
+from pathlib import Path
+from app.security.policy import RiskLevel
+from app.security.registry import ToolRegistry, ToolSpec
+from app.tasks.executor import TaskExecutor
+from app.tasks.planner import TaskPlanner
+from database.database import Database
+
+def modify_value(key):
+    Path(sys.argv[3]).write_text(key, encoding='utf-8')
+    os._exit(23)
+
+database = Database(sys.argv[1])
+registry = ToolRegistry(database)
+registry.register(ToolSpec(
+    name='modify_value', description='Modify a test value',
+    risk=RiskLevel.MODIFICATION, handler=modify_value,
+    validator=lambda args: {'key': str(args['key'])},
+    verifier=lambda _value, args: Path(sys.argv[3]).read_text(encoding='utf-8') == args['key'],
+))
+planner = TaskPlanner(database, registry)
+TaskExecutor(database, planner, registry).resume(sys.argv[2], confirm=lambda *_args: True)
+"""
+    child = subprocess.run(
+        [sys.executable, "-c", script, str(database.path), task_id, str(marker)],
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert child.returncode == 23, child.stderr.decode(errors="replace")
+    assert marker.read_text(encoding="utf-8") == "synthetic"
+
+    assert executor.reconcile_orphaned_tasks() == [
+        {"task_id": task_id, "status": "interrupted", "uncertain_step": 1}
+    ]
+    assert executor.preview_interrupted(task_id)["uncertain_step_number"] == 1
+    with pytest.raises(ValueError, match="Only a task stopped between steps"):
+        executor.resume(task_id, confirm=lambda *_args: True)

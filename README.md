@@ -153,6 +153,34 @@ python -m app.cli mic-check
 python -m app.cli languages
 ```
 
+### Evaluate speech recognition
+
+Use recordings made for testing with each speaker's consent. Keep the WAVs,
+reference text, and any deletion schedule in a private corpus directory outside
+the source checkout. Use mono 16 kHz WAV clips up to 30 seconds. Put a UTF-8
+JSON file beside them and use relative audio paths. For example:
+
+```json
+[
+  {"audio": "en-01.wav", "language": "en", "reference": "The window is open."},
+  {"audio": "bn-mixed.wav", "language": "bn", "cohort": "code-switch", "reference": "Chrome খোলো"}
+]
+```
+
+```powershell
+python scripts\evaluate_stt.py C:\SHU_DATA\speech-evaluation\manifest.json
+```
+
+Use `bn`, `hi`, `en`, `ta`, `te`, and `ml`. Omit `cohort` for `clean`, or
+choose `noisy` or `code-switch`. For a mixed utterance, `language` is the
+expected dominant language. The evaluator uses the cached Whisper model and
+tests auto detection and forced language by default. Use `--mode auto` or
+`--mode forced` to run only one. It prints per-group WER and CER, detection
+results, and missing languages without printing any path, reference or
+transcript in the report. WER uses normalized whitespace-delimited words. CER
+counts normalized Unicode characters without spaces. Keep the corpus fixed
+between comparison runs and have a native speaker review the results.
+
 Measure local Ollama performance with fixed, non-sensitive prompts. The report
 includes round-trip latency (median, p95, minimum and maximum), Ollama model
 load/server/prompt/generation timings, installed model size, free space on the

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from app.config import Settings
 from app.diagnostics import (
     _email_authorization_diagnostic,
@@ -306,7 +308,10 @@ def test_private_acl_diagnostic_warns_for_access_outside_allow_list_without_list
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     (project_dir / ".env").write_text("test-only", encoding="utf-8")
-    settings = Settings.from_env({"SHU_DATA_DIR": str(tmp_path / "private-data")})
+    settings = replace(
+        Settings.from_env({"SHU_DATA_DIR": str(tmp_path / "private-data")}),
+        project_dir=project_dir,
+    )
     monkeypatch.setattr(
         diagnostics,
         "_private_acl_violations",
@@ -328,7 +333,10 @@ def test_private_acl_diagnostic_passes_when_allow_list_is_valid(
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     (project_dir / ".env").write_text("test-only", encoding="utf-8")
-    settings = Settings.from_env({"SHU_DATA_DIR": str(tmp_path / "private-data")})
+    settings = replace(
+        Settings.from_env({"SHU_DATA_DIR": str(tmp_path / "private-data")}),
+        project_dir=project_dir,
+    )
     monkeypatch.setattr(
         diagnostics,
         "_private_acl_violations",

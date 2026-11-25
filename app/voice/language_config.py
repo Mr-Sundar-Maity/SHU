@@ -10,6 +10,7 @@ SUPPORTED_LANGUAGES = {
 }
 
 DEFAULT_LANGUAGE = "bn"
+MIN_LANGUAGE_CONFIDENCE = 0.35
 
 
 def get_language_code(language_name: str | None) -> str:

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from app.ai.ai_engine import SHUAIEngine
 from app.config import Settings, get_settings, response_style_instruction
 from app.security.privacy import is_sensitive_text
-from app.voice.language_config import SUPPORTED_LANGUAGES
+from app.voice.language_config import MIN_LANGUAGE_CONFIDENCE, SUPPORTED_LANGUAGES
 from app.voice.stt_engine import SHUSTTEngine
 from app.voice.tts_engine import SHUTTSEngine
 from app.voice.wake_word import WakeWordListener
@@ -181,7 +181,10 @@ class SHUVoiceAssistant:
             confidence = float(result.get("language_probability") or 0.0)
             if language is not None:
                 language_code = self._normalize_language(language) or language_code
-            elif detected_language in SUPPORTED_LANGUAGES.values() and confidence >= 0.35:
+            elif (
+                detected_language in SUPPORTED_LANGUAGES.values()
+                and confidence >= MIN_LANGUAGE_CONFIDENCE
+            ):
                 language_code = detected_language
             else:
                 self._pending_audio = self._speak(

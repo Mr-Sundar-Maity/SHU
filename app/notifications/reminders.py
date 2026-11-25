@@ -391,6 +391,7 @@ def parse_natural_reminder(
         current = current.replace(tzinfo=zone)
     else:
         current = current.astimezone(zone)
+    current_utc = current.astimezone(timezone.utc)
 
     phrase = request.strip().rstrip(".!?। ")
     phrase = re.sub(r"^(?:please\s+)?remind\s+me\s+to\s+", "", phrase, flags=re.I)
@@ -412,7 +413,7 @@ def parse_natural_reminder(
         text = localized_match.group("text").strip(" \t,،:؛")
         if not text:
             raise ValueError("Reminder text cannot be empty")
-        return ParsedReminder(text, current + delta)
+        return ParsedReminder(text, (current_utc + delta).astimezone(zone))
 
     relative = _RELATIVE.fullmatch(phrase)
     if relative:
@@ -427,7 +428,9 @@ def parse_natural_reminder(
         )
         if delta > timedelta(days=365):
             raise ValueError("Reminder time cannot be more than one year away")
-        return ParsedReminder(relative.group("text").strip(), current + delta)
+        return ParsedReminder(
+            relative.group("text").strip(), (current_utc + delta).astimezone(zone)
+        )
 
     for relative_pattern in _ENGLISH_RELATIVE_PATTERNS:
         relative = relative_pattern.fullmatch(phrase)
@@ -441,7 +444,7 @@ def parse_natural_reminder(
         text = _strip_reminder_prefix(relative.group("text")).strip(" \t,")
         if not text:
             raise ValueError("Reminder text cannot be empty")
-        return ParsedReminder(text, current + delta)
+        return ParsedReminder(text, (current_utc + delta).astimezone(zone))
 
     phrase = _canonicalize_localized_schedule(phrase)
     schedule_first = _CALENDAR_SCHEDULE_FIRST.fullmatch(phrase)
@@ -541,7 +544,7 @@ def parse_natural_reminder(
     if schedule in {"every day", "daily"}:
         recurrence = "daily"
         due = datetime.combine(current.date(), due_time)
-        if due <= current:
+        if due.astimezone(timezone.utc) <= current_utc:
             due += timedelta(days=1)
     elif schedule.startswith("every week") or schedule == "weekly":
         recurrence = "weekly"
@@ -558,20 +561,28 @@ def parse_natural_reminder(
         due = datetime.combine(current.date() + timedelta(days=1), due_time)
     elif schedule == "today":
         due = datetime.combine(current.date(), due_time)
-        if due <= current:
+        if due.astimezone(timezone.utc) <= current_utc:
             raise ValueError("That time has already passed today")
     else:  # at <clock>: choose the next occurrence, never silently schedule in the past.
         due = datetime.combine(current.date(), due_time)
-        if due <= current:
+        if due.astimezone(timezone.utc) <= current_utc:
             due += timedelta(days=1)
 
+    _validate_local_time(due)
     return ParsedReminder(text, due, recurrence)
+
+
+def _validate_local_time(value: datetime) -> None:
+    # A wall time in a daylight-saving gap changes when round-tripped via UTC.
+    round_tripped = value.astimezone(timezone.utc).astimezone(value.tzinfo)
+    if round_tripped.replace(tzinfo=None) != value.replace(tzinfo=None):
+        raise ValueError("That local time does not exist because the clock changes. Choose a different time.")
 
 
 def _next_weekday(current: datetime, weekday: int, due_time: time) -> datetime:
     days_ahead = (weekday - current.weekday()) % 7
     due = datetime.combine(current.date() + timedelta(days=days_ahead), due_time)
-    if due <= current:
+    if due.astimezone(timezone.utc) <= current.astimezone(timezone.utc):
         due += timedelta(days=7)
     return due
 
@@ -833,4 +844,5 @@ class ReminderService:
             raise ValueError("due_at must be an ISO-8601 date/time") from error
         if due.tzinfo is None:
             due = due.replace(tzinfo=zone)
+        _validate_local_time(due)
         return due

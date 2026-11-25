@@ -52,15 +52,21 @@ class TaskExecutor:
                 checkpoint = json.loads(row["checkpoint_json"])
             except (TypeError, json.JSONDecodeError):
                 steps, checkpoint = [], []
-            status, uncertain_step = _classify_orphaned_checkpoint(steps, checkpoint)
+            status, uncertain_step = _classify_orphaned_checkpoint(
+                steps, checkpoint, row["inflight_step"]
+            )
             if status == "interrupted" and uncertain_step is None:
                 uncertain_step = max(1, min(len(steps), 1)) if steps else None
             with self.database.connect() as connection:
                 with connection:
                     cursor = connection.execute(
                         "UPDATE tasks SET status=?,finished_at=?,runner_pid=NULL,inflight_step=? "
-                        "WHERE task_id=? AND status='running' AND runner_pid IS ?",
-                        (status, now, uncertain_step, row["task_id"], runner_pid),
+                        "WHERE task_id=? AND status='running' AND runner_pid IS ? "
+                        "AND inflight_step IS ? AND checkpoint_json=?",
+                        (
+                            status, now, uncertain_step, row["task_id"], runner_pid,
+                            row["inflight_step"], row["checkpoint_json"],
+                        ),
                     )
                     if cursor.rowcount != 1:
                         continue
@@ -229,12 +235,13 @@ class TaskExecutor:
             if verifier_name and verifier_name not in self.verifiers:
                 raise ValueError(f"Verifier is not registered: {verifier_name}")
         if resume:
-            completed, start_index = self._recovery_state(task_id, steps)
+            completed, start_index, checkpoint_json = self._recovery_state(task_id, steps)
             self._claim_task(
                 task_id,
                 allowed_statuses=("cancelled", "partially_completed"),
                 expected_request=expected_request,
                 expected_steps=steps if expected_steps is not None else None,
+                expected_checkpoint_json=checkpoint_json,
             )
             results = list(completed)
         else:
@@ -378,7 +385,7 @@ class TaskExecutor:
     def preview_resume(self, task_id: str) -> dict[str, Any]:
         """Return verified completed steps and the safe unstarted suffix."""
         steps = self.planner.get_steps(task_id)
-        completed, start_index = self._recovery_state(task_id, steps)
+        completed, start_index, _checkpoint_json = self._recovery_state(task_id, steps)
         with self.database.connect() as connection:
             row = connection.execute(
                 "SELECT request FROM tasks WHERE task_id=?", (task_id,)
@@ -404,7 +411,7 @@ class TaskExecutor:
         self,
         task_id: str,
         steps: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int, str]:
         with self.database.connect() as connection:
             row = connection.execute(
                 "SELECT status,checkpoint_json FROM tasks WHERE task_id=?", (task_id,)
@@ -435,7 +442,7 @@ class TaskExecutor:
             for index, item in enumerate(completed, start=1)
         ):
             raise ValueError("Only a verified completed prefix can be resumed")
-        return completed, step_number - 1
+        return completed, step_number - 1, row["checkpoint_json"]
 
     def _claim_task(
         self,
@@ -444,6 +451,7 @@ class TaskExecutor:
         allowed_statuses: tuple[str, ...],
         expected_request: str | None = None,
         expected_steps: list[dict[str, Any]] | None = None,
+        expected_checkpoint_json: str | None = None,
     ) -> None:
         placeholders = ",".join("?" for _ in allowed_statuses)
         with self.database.connect() as connection:
@@ -467,19 +475,23 @@ class TaskExecutor:
 
                 plan_condition = " AND plan_json=?" if expected_plan_json is not None else ""
                 request_condition = " AND request=?" if request_guard is not None else ""
+                checkpoint_condition = " AND checkpoint_json=?" if expected_checkpoint_json is not None else ""
                 cursor = connection.execute(
                     f"UPDATE tasks SET status='running', finished_at=NULL,runner_pid=?,inflight_step=NULL "
                     f"WHERE task_id=? AND status IN ({placeholders})"
-                    f"{plan_condition}{request_condition}",
+                    f"{plan_condition}{request_condition}{checkpoint_condition}",
                     (
                         os.getpid(),
                         task_id,
                         *allowed_statuses,
                         *((expected_plan_json,) if expected_plan_json is not None else ()),
                         *((request_guard,) if request_guard is not None else ()),
+                        *((expected_checkpoint_json,) if expected_checkpoint_json is not None else ()),
                     ),
                 )
                 if cursor.rowcount != 1:
+                    if expected_checkpoint_json is not None:
+                        raise ValueError("Task checkpoint changed or task is no longer eligible; review it again")
                     raise ValueError("Task is already running or is not eligible for execution")
 
     def _set_status(self, task_id: str, status: str, *, finished: bool = False) -> None:
@@ -516,7 +528,14 @@ class TaskExecutor:
 def _classify_orphaned_checkpoint(
     steps: Any,
     checkpoint: Any,
+    inflight_step: int | None,
 ) -> tuple[str, int | None]:
+    # A resumed action keeps its old cancellation marker until the new outcome
+    # is committed. The in-flight marker is the newer and safer evidence.
+    if inflight_step is not None:
+        if isinstance(steps, list) and type(inflight_step) is int and 1 <= inflight_step <= len(steps):
+            return "interrupted", inflight_step
+        return "interrupted", None
     if not isinstance(steps, list) or not steps or not isinstance(checkpoint, list):
         return "interrupted", 1 if isinstance(steps, list) and steps else None
     verified_prefix = 0

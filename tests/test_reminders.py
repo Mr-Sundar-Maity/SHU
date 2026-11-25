@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from apscheduler.triggers.cron import CronTrigger
@@ -201,6 +202,61 @@ def test_natural_reminder_parser_handles_relative_and_calendar_times():
     )
     assert weekly.recurrence == "weekly"
     assert weekly.due_at == datetime(2026, 11, 16, 9, 0, tzinfo=now.tzinfo)
+
+
+@pytest.mark.parametrize(("month", "day", "hour"), [(3, 8, 1), (11, 1, 0)])
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "stretch in 2 hours",
+        "stretch in two hours",
+        "১২০ মিনিট পরে ওষুধ খাও",
+        "मुझे याद दिलाओ 2 घंटे बाद दवा लेना",
+        "120 நிமிடம் கழித்து மாத்திரை எடு",
+        "120 నిమిషాలు తర్వాత మందు తీసుకో",
+        "120 മിനിറ്റ് കഴിഞ്ഞ് മരുന്ന് കഴിക്കുക",
+    ],
+)
+def test_relative_reminder_measures_elapsed_time_across_dst(month, day, hour, phrase):
+    zone = ZoneInfo("America/New_York")
+    now = datetime(2026, month, day, hour, 45, tzinfo=zone)
+    parsed = parse_natural_reminder(phrase, now=now, timezone_name=zone.key)
+
+    assert parsed.due_at.astimezone(timezone.utc) == (
+        now.astimezone(timezone.utc) + timedelta(hours=2)
+    )
+    assert parsed.due_at.tzinfo == zone
+
+
+@pytest.mark.parametrize("phrase", ["stretch tomorrow at 2:30 AM", "stretch daily at 2:30 AM"])
+def test_natural_reminder_rejects_a_nonexistent_local_time(phrase):
+    zone = ZoneInfo("America/New_York")
+    now = datetime(2026, 3, 7, 14, tzinfo=zone)
+
+    with pytest.raises(ValueError, match="local time does not exist"):
+        parse_natural_reminder(phrase, now=now, timezone_name=zone.key)
+
+
+@pytest.mark.parametrize("due", ["2026-03-08T02:30:00", datetime(2026, 3, 8, 2, 30)])
+def test_reminder_creation_rejects_a_nonexistent_local_time(tmp_path, due):
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    service = ReminderService(database)
+
+    with pytest.raises(ValueError, match="local time does not exist"):
+        service.create("Stretch", due, timezone_name="America/New_York", recurrence="daily")
+    assert service.list_pending() == []
+
+
+def test_calendar_reminder_does_not_schedule_an_earlier_fold_as_future():
+    zone = ZoneInfo("America/New_York")
+    now = datetime(2026, 11, 1, 1, 15, fold=1, tzinfo=zone)
+
+    with pytest.raises(ValueError, match="time has already passed"):
+        parse_natural_reminder("stretch today at 1:30 AM", now=now, timezone_name=zone.key)
+
+    parsed = parse_natural_reminder("stretch at 1:30 AM", now=now, timezone_name=zone.key)
+    assert parsed.due_at == datetime(2026, 11, 2, 1, 30, tzinfo=zone)
 
 
 @pytest.mark.parametrize(
