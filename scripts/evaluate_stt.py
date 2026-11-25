@@ -80,11 +80,13 @@ def load_samples(manifest: Path) -> list[Sample]:
         if not isinstance(filename, str) or not filename:
             raise ValueError(f"Sample {index} needs a relative WAV file")
         relative = Path(filename)
-        audio = (directory / relative).resolve()
         if (
             relative.is_absolute() or relative.anchor or ".." in relative.parts
-            or relative.suffix.casefold() != ".wav" or not audio.is_relative_to(directory)
+            or relative.suffix.casefold() != ".wav"
         ):
+            raise ValueError(f"Sample {index} WAV must stay inside the corpus directory")
+        audio = (directory / relative).resolve()
+        if not audio.is_relative_to(directory):
             raise ValueError(f"Sample {index} WAV must stay inside the corpus directory")
         if not isinstance(language, str) or language not in LANGUAGES:
             raise ValueError(f"Sample {index} must use a supported language code")

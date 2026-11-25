@@ -16,7 +16,7 @@ integrity (`ok`) and schema version 5 also passed. Doctor passed its core
 environment checks. Its remaining warnings are the missing WhatsApp access
 token and missing trained `Hey SHU` model.
 
-## GitHub checkpoint on 2026-11-26 (r5)
+## GitHub checkpoint on 2026-11-26 (r6)
 
 - Phase 3. `scripts\evaluate_stt.py` scores consented local WAV corpora with
   cached Whisper. It reports aggregate WER, CER, language detection and the
@@ -25,6 +25,8 @@ token and missing trained `Hey SHU` model.
   in auto and forced modes, with one correct auto detection. This is one
   sample. The evaluator reported the other five languages missing. A consented
   six-language corpus and native review are still needed.
+  The r6 follow-up rejects absolute, UNC and parent-traversal paths before
+  resolving any clip. Seven focused evaluator tests passed for this version.
 - Phase 13. Relative durations now use elapsed time even when a DST change
   intervenes. Calendar previews and manual saves reject local times that do
   not exist. Calendar comparisons use UTC through the repeated hour. All
@@ -42,10 +44,16 @@ token and missing trained `Hey SHU` model.
   and runs tests with an isolated database. Two ACL fixtures now select their
   test checkout explicitly. A clean r4 Git archive with those fixes replayed
   all 545 r4 tests using the local venv. Hosted runs are tracked under GitHub Actions.
-- The local r5 source ZIP has 110 entries and 279,659 bytes. SHA-256 is
-  `47160984a02d8c13bd9a7628689d3264d3990f03a8e61a70e036691d9477e3ed`.
+- The first hosted Windows CI run for `387b54b` ended before runner allocation
+  and executed zero steps. GitHub's check annotation attributes the failure to
+  an account billing lock. Hosted clean installation and test results remain
+  pending until the account can start a job. [Windows CI run 45685254990](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45685254990)
+- The local r6 source ZIP has 110 entries and 279,744 bytes. SHA-256 is
+  `8b4b05ec5fec6b105306b62d30fbb2ee827a69f628dca5f58cc1ef951dc10252`.
   It matches the package allowlist. The extracted copy initialized and
-  verified a separate schema v5 database. GitHub carries the CI workflow and
+  verified a separate schema v5 database. The clean r6 extraction also passed
+  all 573 tests in 36.30 seconds using the existing local venv, without a
+  project `.env` or credential directory. GitHub carries the CI workflow and
   documentation alongside the application source.
 
 ## Earlier GitHub checkpoint on 2026-11-26 (r4)
@@ -260,7 +268,7 @@ token and missing trained `Hey SHU` model.
 | 16. Email | Gmail OAuth, search/read and confirmed draft/send paths implemented. CLI reply and forward approvals bind the recipient, subject and delivery mode. Changes are rejected before a provider write. Outlook reply tests check one reviewed To address and empty Cc/Bcc on the returned draft before send. | Broader Gmail reply/forward/attachment/send acceptance; Outlook registration/consent remains unverified. The verified draft routing still requires a live Outlook acceptance check. |
 | 17. Dashboard | Voice, task, memory, reminder, communication, Cloud AI and automation controls implemented, including six response-style modes and a post-session voice request planner handoff with exact-step preview and approval; dashboard text size is adjustable from 8–24 points. The conversation transcript displays literal text and line breaks. Voice stop and queued Quiet mode have offscreen regression coverage. Offscreen shutdown tests confirm responsive closing with two active Qt workers and no new work. | Target-desktop keyboard/screen-reader acceptance and full interactive/provider acceptance remain. |
 | 18. Hardening | Latest full verification: 573 tests in 51.27 seconds; dependency, compile, database and Doctor checks pass; local Qwen benchmark/soak reports Ollama timings, model footprint, SHU data-volume free space, CPU/RAM and latency; a FIFO gate prevents Ollama and Whisper CPU overlap | Target-device RAM headroom, full hardware voice path, wake-word acceptance, complete threat-model run and physical power-loss test remain. |
-| 19. Release | Setup/startup/recovery tooling, verified 2026-11-26 r5 personal source ZIP and extracted-copy schema-5 database CLI smoke exist. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain. |
+| 19. Release | Setup/startup/recovery tooling, verified 2026-11-26 r6 personal source ZIP and extracted-copy schema-5 database CLI smoke exist. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain. |
 
 ## External and hardware prerequisites
 
@@ -281,9 +289,10 @@ token and missing trained `Hey SHU` model.
 
 ## Resume point
 
-Resume from the r5 software checkpoint and compare the working tree with
+Resume from the r6 software checkpoint and compare the working tree with
 `origin/main`. Continue with the acceptance items in the phase rows and publish
-verified source and progress updates to the same branch. Live checks still
+verified source and progress updates to the same branch. Rerun Windows CI after
+GitHub restores runner access. Live checks still
 need owner audio and consented six-language speech, the custom wake model,
 WhatsApp setup and recipient consent, reviewed Gmail actions and Outlook
 authorization. The phase rows also track target accessibility, recovery and

@@ -59,11 +59,19 @@ def test_aggregate_uses_reference_lengths_and_voice_acceptance_rule(tmp_path):
     assert calls == [None, "en", None, "en", None, "bn"]
 
 
-@pytest.mark.parametrize("filename", ["../elsewhere.wav", "C:/outside.wav", "image.png"])
-def test_manifest_rejects_unsupported_or_external_audio(tmp_path, filename):
+@pytest.mark.parametrize("filename", ["../elsewhere.wav", "//outside.invalid/share/clip.wav", "image.png"])
+def test_manifest_rejects_unsupported_or_external_audio(tmp_path, filename, monkeypatch):
     manifest = write_corpus(tmp_path, [
         {"audio": filename, "language": "bn", "reference": "বাংলা"},
     ])
+    path_type = type(manifest)
+    resolve = path_type.resolve
+
+    def resolve_manifest_only(path):
+        assert path == manifest
+        return resolve(path)
+
+    monkeypatch.setattr(path_type, "resolve", resolve_manifest_only)
     with pytest.raises(ValueError, match="Sample 1 WAV must stay"):
         load_samples(manifest)
 
