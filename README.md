@@ -1,1 +1,531 @@
 # SHU
+
+SHU is a local-first Windows voice assistant. The repository contains the
+voice and AI path plus the v1 foundations for approved memory, task execution,
+desktop tools, isolated public-page reading and form preparation, Office file generation, reminders,
+communications drafts, and a PySide6 dashboard. Review the [delivery status](docs/STATUS.md)
+for hardware and account prerequisites, the [PRD traceability](docs/PRD_TRACEABILITY.md)
+for acceptance evidence across the 19 phases, and the [progress checkpoint](docs/PROJECT_PROGRESS.md)
+to resume development.
+
+## Requirements
+
+- Windows 10/11 and Python 3.11 (the PowerShell setup script creates `.venv`)
+- Ollama with the configured local model (default: `qwen2.5:1.5b`)
+- A microphone and speaker for live voice use
+- Microsoft Office for Office document generation
+- Internet access for first Whisper model download, Chromium installation,
+  and Edge TTS playback
+
+User data is stored separately under `C:\SHU_DATA` by default. Real settings
+belong in `.env`; `.env` is ignored by Git. Start from `.env.example` if setup
+creates the file for you.
+
+## Full v1 setup
+
+Run in PowerShell:
+
+```powershell
+cd C:\SHU
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+```
+
+The installer runs setup, creates `.venv` if needed, installs the pinned core and v1
+dependencies, installs Playwright Chromium, initializes/upgrades the SQLite
+schema with a pre-migration backup, checks package consistency, and creates a
+current-user Start Menu shortcut. Use `-CoreOnly` only if you do not need the
+later v1 integrations. Startup launch remains opt-in:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -EnableStartup
+```
+
+Remove only the Start Menu and Startup shortcuts with `-RemoveShortcuts`; this
+preserves the project, `.env`, virtual environment, database and user data:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -RemoveShortcuts
+```
+
+For dependency or database setup without creating shortcuts, run
+`scripts\setup.ps1` directly.
+
+Build a private, personal-use source bundle after editing the project. Use a
+new unique output name each time; the builder refuses to overwrite an existing
+ZIP or checksum:
+
+```powershell
+python scripts\package_personal.py --output dist\SHU_personal_source_YYYY-MM-DD.zip
+```
+
+The ZIP contains allowlisted source, tests, documentation and setup files. The
+builder excludes `.env`, OAuth credentials, local databases, model files and
+user data; it checks archive paths/CRC and Python syntax, then writes a SHA-256
+sidecar. This is a source archive for personal testing; it is not a signed
+binary installer.
+
+When setup runs elevated, it also restricts `.env`, the configured Gmail OAuth
+client JSON, and `SHU_DATA_DIR` access to the current user, SYSTEM, and
+Administrators. If setup runs without elevation,
+open an Administrator PowerShell and run
+`powershell -ExecutionPolicy Bypass -File scripts\secure-data.ps1`; then rerun
+`.\.venv\Scripts\python.exe -m app.cli doctor` and confirm `Private data ACL` passes. The script
+refuses a data directory inside the source tree and refuses junctions or
+symbolic links in private paths.
+
+Activate the environment:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Run that activation command in each new PowerShell window before using the
+`python -m app.cli ...` examples below. Without activation, `python` may point
+to a different Python installation that does not contain SHU's dependencies.
+Direct invocation also works: .\.venv\Scripts\python.exe -m app.cli ...
+
+## Run SHU
+
+Open the desktop dashboard:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli gui
+```
+
+The direct command above uses the project environment even if it has not been
+activated in this PowerShell session.
+
+Ollama must be running on the local machine for chat and voice AI. If `doctor`
+reports the Ollama service unavailable, open Ollama or run `ollama serve` in a
+separate PowerShell window and leave it running. On a new installation, fetch
+the configured model once with `ollama pull qwen2.5:1.5b`.
+
+Or use the keyboard chat / voice assistant:
+
+```powershell
+python -m app.cli chat
+python -m app.cli voice --language bn
+```
+
+In CLI text chat, enter `/reset` (or `/clear`) to discard the recent
+conversation context and start fresh; approved saved memories are not deleted.
+The dashboard's **Reset conversation** button clears the same temporary context
+and the visible transcript. Both controls are unavailable while a chat request
+or voice session is active.
+
+The dashboard's **Ready** state is idle: it does not capture microphone audio or
+run wake-word inference in the background. Audio and the optional custom wake
+listener start only after you choose **Start listening**; stopping the session
+returns SHU to Ready.
+
+List microphone devices and supported speech languages. The mic-check command
+lets you select an input and reports approximate level/clipping statistics
+after typed confirmation; it keeps no recording or transcript. You can specify
+--device INDEX --seconds 3, with a duration between 1 and 15 seconds. After
+finding a working input, set SHU_MICROPHONE_DEVICE to that index in .env before
+starting voice mode. The level result does not prove speech recognition accuracy.
+Optional voice barge-in can interrupt Edge TTS when sustained speech is detected
+on the selected microphone. It is off by default; enable it with
+`SHU_VOICE_BARGE_IN=true` after the microphone check, or enable it in the
+dashboard Settings tab for the next voice session. The dashboard choice lasts
+only for the current app session; `.env` keeps the setting across restarts.
+SHU keeps a short in-memory
+pre-roll and phrase buffer (up to 15 seconds), passes it directly to local Whisper,
+and does not save or upload the captured audio. Set `SHU_VOICE_BARGE_IN_RMS` to
+adjust its local RMS threshold; speaker echo can cause false triggers, so verify
+the threshold with the selected microphone and speaker setup.
+
+In the dashboard, after a voice session ends, **Plan last voice request** sends
+the latest recognized utterance to the task planner. Review the original request
+and exact proposed steps in the confirmation dialog. SHU starts no task unless
+you approve that plan; the voice handoff does not overwrite text already in the
+chat input.
+
+Dashboard Settings also provides friendly, casual, formal, serious, humorous
+and supportive response styles. Friendly is the default. The dashboard selection
+applies for the current session; set `SHU_RESPONSE_STYLE` in `.env` to choose the
+startup default. The style changes wording only and does not alter tool approval
+or security rules.
+
+```powershell
+python -m app.cli mic-list
+python -m app.cli mic-check
+python -m app.cli languages
+```
+
+Measure local Ollama performance with fixed, non-sensitive prompts. The report
+includes round-trip latency (median, p95, minimum and maximum), Ollama model
+load/server/prompt/generation timings, installed model size, free space on the
+SHU data volume, and Windows system-memory and whole-system CPU snapshots. It
+refuses non-loopback endpoints and does not print or store model responses.
+`--samples` accepts 1-100 requests; 20 requests provide a short extended run:
+
+```powershell
+python scripts\benchmark_local_ai.py --samples 3
+```
+
+Local Ollama and Whisper inference share a FIFO CPU-work queue so a long local
+AI response does not overlap CPU-heavy transcription. A voice stop cancels a
+transcription that is still waiting in the queue; queued work also has a
+bounded wait based on `SHU_REQUEST_TIMEOUT_SECONDS`.
+
+## Reminders and personal memory
+
+Create a reminder with one of the supported natural-language time forms:
+
+```powershell
+python -m app.cli reminders add "Remind me to stretch in 20 minutes"
+python -m app.cli reminders add "Call Sam tomorrow at 9 AM" --timezone Asia/Kolkata
+python -m app.cli reminders add "Take medicine daily at 8:30 AM"
+python -m app.cli reminders add "২০ মিনিট পরে ওষুধ খাও"
+python -m app.cli reminders add "मुझे याद दिलाओ 2 घंटे बाद दवा लेना"
+python -m app.cli reminders list
+```
+
+The parser accepts bounded today/tomorrow, daily, weekly and named-weekday
+calendar forms with localized clock words in Bengali, Hindi, Tamil, Telugu and
+Malayalam, along with English calendar forms and relative minutes, hours or
+days in all six supported languages. For example:
+
+```powershell
+python -m app.cli reminders add "ওষুধ খাও আগামীকাল সকাল ৯টা"
+python -m app.cli reminders add "दवा लो हर सोमवार शाम 5 बजे"
+python -m app.cli reminders add "மருந்து எடுத்துக்கொள் நாளை காலை 9 மணிக்கு"
+python -m app.cli reminders add "మందు ప్రతి రోజు ఉదయం 9 గంటలకు"
+python -m app.cli reminders add "മരുന്ന് എല്ലാ ആഴ്ചയും തിങ്കളാഴ്ച രാവിലെ 9 മണിക്ക്"
+```
+
+English clock forms also accept explicit morning/afternoon/evening/night
+dayparts and the unambiguous words noon, midday and midnight. Conflicting
+daypart and AM/PM cues are rejected. Unclear or past same-day times are
+rejected. These phrases are a bounded set of supported forms; unrecognized
+grammar must be rephrased. The dashboard shows parsed text and time before
+saving.
+The dashboard must be running to deliver scheduled reminders. If quiet mode is
+off, reminders are also spoken using the selected language's Edge TTS voice.
+Daily and weekly reminders start at their saved date and time, then recur in
+the selected timezone. Turning on Quiet mode before a queued notification
+reaches the dashboard suppresses its speech.
+
+When adding or correcting approved memories, SHU rejects known credential
+formats and common password assignments in its six supported languages.
+Memory expiry dates must include a timezone. Expired records are excluded from
+retrieval, listing and export; permanent deletion requires a separate command:
+
+```powershell
+python -m app.cli memory retention MEMORY_ID --until 2027-01-01T00:00:00+05:30 --confirm
+python -m app.cli memory retention MEMORY_ID --clear --confirm
+python -m app.cli memory purge-expired --confirm
+python -m app.cli memory review
+```
+
+Memory review reports lexical duplicate and possible-conflict suggestions for
+manual comparison; it does not merge or change records. Deleting or expiring a
+memory also removes episodic rows explicitly linked to that memory.
+
+## Verify and recover data
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify.ps1
+python -m app.cli doctor
+python -m app.cli db backup
+python -m app.cli db backup --keep 20
+```
+
+`db backup` keeps the newest 10 timestamped SHU backups by default. Rotation
+only removes files matching SHU's generated timestamped backup naming pattern.
+
+The current Windows user has the SHU dashboard logon shortcut enabled. Run
+these commands to recreate it or disable it (run setup first):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\manage-startup.ps1
+powershell -ExecutionPolicy Bypass -File scripts\manage-startup.ps1 -Remove
+python scripts\generate_license_inventory.py
+```
+
+The shortcut starts the dashboard with the project's `pythonw.exe`. The setup
+script does not register it automatically on a fresh machine.
+The license inventory captures metadata from the active virtual environment in
+`docs/THIRD_PARTY_LICENSES.csv`. Review the listed license texts before release;
+the report does not select a license for SHU itself.
+
+## Persistent task queue
+
+Task plans remain in SQLite with `planned` status until a user starts them.
+Inspect the FIFO queue, then review and run only its oldest plan with an explicit
+confirmation. Each modifying or separately approval-gated tool asks for its own
+approval; refusing an action does not call its handler.
+
+```powershell
+python -m app.cli tasks queue
+python -m app.cli tasks run-next --confirm
+```
+
+`tasks queue` is read-only. `tasks run-next` runs at most one task. Without
+`--confirm`, it prints the next plan and exits without starting anything. The
+dashboard Task Queue tab provides the same FIFO review and run controls.
+
+The public webpage reader may retry a transient transport failure or HTTP
+408/425/429/5xx response up to two times with bounded exponential backoff.
+Automatic retries are available only to registered read-only tools; modifying
+and external actions are never retried by this policy. SHU can interrupt a
+backoff wait immediately when the emergency stop is triggered.
+
+Interrupted tasks can be inspected and resumed only when SHU stopped between
+verified steps. If the SHU process exits while a step is in flight, the next
+startup marks that step as uncertain and never replays it automatically. Inspect
+the target app, then explicitly record whether the action did not happen or
+completed and was reviewed:
+
+```powershell
+python -m app.cli tasks status TASK_ID
+python -m app.cli tasks resume TASK_ID --confirm
+python -m app.cli tasks recover TASK_ID --action retry --confirm
+python -m app.cli tasks recover TASK_ID --action accept-complete --confirm
+python -m app.cli tasks feedback TASK_ID
+```
+
+Use `retry` only after confirming the uncertain action did not take effect;
+use `accept-complete` only after checking its result. Both commands require a
+typed `YES`. The former leaves a safe checkpoint for a separately reviewed
+`tasks resume`; the latter records a manual-review result and does not replay
+that step.
+
+Task feedback is stored in the local audit trail only after an explicit review
+and confirmation. Credential-related correction text is rejected.
+
+To restore a verified versioned SHU backup, SHU preserves the current database first
+and migrates an older backup to the current schema before replacement.
+Review the file path and pass the explicit confirmation flag:
+
+```powershell
+python -m app.cli db restore --from C:\SHU_DATA\memory\backups\shu-backup.db --confirm-restore
+```
+
+`doctor` prints `PASS`, `WARN`, or `FAIL`. Warnings call out optional features
+that need an account, trained model, or user-specific choice; a `FAIL` means a
+core setup check is broken. Review `docs/STATUS.md` before relying on an
+integration whose status is partial.
+
+## Privacy and permissions
+
+- Ollama is the default AI provider; sending local requests to Gemini after an
+  Ollama failure stays disabled by default (`SHU_CLOUD_FALLBACK=false`). If
+  Gemini is selected and unavailable, SHU tries local Ollama by default
+  (`SHU_LOCAL_FALLBACK=true`) and reports that fallback in the console and
+  status callback.
+- Sensitive prompts and recent context stay local unless cloud personal-data
+  processing is explicitly enabled in `.env`; detected sensitive text is also
+  blocked from cloud speech synthesis.
+- Cloud AI has an independent hard disable: set `SHU_CLOUD_AI_ENABLED=false`
+  in `.env` or clear **Cloud AI enabled** in Dashboard Settings. Google-selected
+  requests then route to local Ollama, and direct Google calls plus cloud
+  fallback are blocked. The dashboard choice applies to new requests in the
+  current session; `.env` controls startup defaults. This switch covers AI
+  providers, not separate network services such as Edge TTS or email.
+- Registered desktop/browser automation has a separate switch:
+  `SHU_AUTOMATION_ENABLED=false` in `.env` or clear **SHU automation enabled**
+  in Dashboard Settings. Queued tasks remain stopped and the tool registry
+  rejects actions even if a caller bypasses disabled dashboard buttons. An
+  action already in progress may finish; use Emergency stop to cancel active
+  work. The dashboard choice lasts for the current session.
+- Edge TTS requires internet and sends non-sensitive speech text to Microsoft's service.
+- Edge TTS generation is bounded by `SHU_TTS_TIMEOUT_SECONDS` (20 seconds by
+  default). If the service stalls or returns no audio, SHU keeps the text
+  response available and removes any partial audio file.
+- The dashboard offers speech-rate adjustment from -50% to +50% and playback
+  volume from 0% to 100%; the values apply to the next voice session. Dashboard
+  text size can be changed immediately from 8 to 24 points with
+  `SHU_UI_FONT_SIZE=10` as the default. During a
+  session, **Pause speech** and **Resume speech** hold or continue playback;
+  Emergency stop still cancels it immediately. The defaults are
+  `SHU_TTS_RATE_PERCENT=0` and `SHU_TTS_VOLUME=1.0`.
+- Voice barge-in is opt-in (`SHU_VOICE_BARGE_IN=false` by default); when enabled,
+  microphone onset detection and its bounded phrase buffer run locally and feed
+  directly into Whisper. No microphone recording is written to disk or sent to
+  the cloud, and the configured mute control disables the monitor.
+- Model responses cannot execute shell commands. Automation is restricted to
+  registered tools, validated arguments, explicit approvals, and audit records.
+- The dashboard can inspect one exact visible window through UI Automation and,
+  after approval, fill one unique empty non-password text field. SHU verifies the
+  field value and never submits the form; existing or protected values are left alone.
+- Physical mouse clicks require separate explicit approval, a unique named
+  visible control in an exact-title non-minimized window, and an expected UIA
+  state (`checked`, `unchecked`, `selected`, `unselected`, `hidden` or `disabled`).
+  SHU rereads that state after clicking; if it cannot verify the result, the task
+  stops as partial and does not repeat the click. If the expected state already
+  holds, SHU skips the input.
+- Screen OCR is limited to a user-selected rectangle, requires explicit approval,
+  runs locally through Tesseract, and does not save the screenshot.
+- The dashboard registers `Ctrl+Alt+Pause` as a system-wide emergency stop while
+  it is open. If another application owns that key combination, the dashboard
+  reports the conflict and its Emergency stop button remains available.
+- During a voice session, use **Mute microphone** to pause wake-word/audio
+  capture and discard any in-progress recording; **Unmute microphone** resumes it.
+  This microphone control is independent of the cloud-AI and automation switches.
+- Email mailbox access needs provider OAuth consent. WhatsApp needs a configured
+  delivery route and authenticated user session. The Meta Cloud API adapter is
+  available when a business phone number ID and access token are set.
+- Never commit `.env`, databases, logs, backups, or generated private files.
+- Windows ACLs for `.env` and the complete SHU data tree must pass the doctor
+  check before storing credentials or relying on private data. The check also
+  covers the configured Gmail OAuth client file when it exists.
+
+## Approved communications
+
+`comms draft` prompts for the recipient and message without putting them in the
+shell command history. Preview shows the exact text and its approval digest.
+Send needs both that digest and the explicit `--confirm` flag. The WhatsApp
+adapter follows Meta's versioned Cloud API `/messages` endpoint and bearer-token
+authentication; using it requires a configured WhatsApp Business phone number.
+See the [Meta WhatsApp Business Platform docs](https://developers.facebook.com/documentation/business-messaging/whatsapp/overview).
+WhatsApp recipient names are resolved only by exact match from SHU's private
+local contact book. Duplicate names require a numbered choice; unknown names are
+never guessed. The dashboard's Communications tab also manages this contact
+book, then provides the same local-draft, exact-preview, and explicit-send-
+confirmation flow without attachments. Provider-accepted sends produce a
+dashboard status update and a Windows tray notice when the tray is available.
+
+```powershell
+python -m app.cli contacts add
+python -m app.cli contacts list
+python -m app.cli contacts delete CONTACT_ID --confirm-delete
+python -m app.cli comms draft --channel whatsapp
+python -m app.cli comms preview DRAFT_ID
+python -m app.cli comms send DRAFT_ID --digest PREVIEW_DIGEST --confirm
+```
+
+Set `SHU_EMAIL_PROVIDER=gmail` or `outlook` for email and configure the WhatsApp
+Business phone number ID and Graph API version in `.env`. Store the WhatsApp
+access token with the hidden-input Credential Manager command below; do not put
+the token in `.env` or chat.
+
+For Gmail, enable the Gmail API, create a Desktop OAuth client, keep its JSON
+outside the source folder, and set `SHU_GMAIL_OAUTH_CLIENT_SECRETS` to that
+path. For Outlook, register a public-client app in Microsoft Entra, enable
+device-code sign-in and set its application ID in
+`SHU_MICROSOFT_OAUTH_CLIENT_ID`. Then authorize locally:
+
+```powershell
+python -m app.cli auth email login --provider gmail
+python -m app.cli auth email login --provider outlook
+python -m app.cli auth email status --provider gmail
+python -m app.cli auth email verify --provider gmail
+```
+
+OAuth refresh data is kept in Windows Credential Manager. No access token is
+printed. Gmail uses the `gmail.modify` scope; Outlook requests delegated
+`User.Read`, `Mail.ReadWrite`, and `Mail.Send`. The login command asks the
+provider for consent and does not send a message. The explicit `verify` command
+makes a read-only profile request and reports only whether it succeeded; it
+does not display or store account details. See Google's [Gmail OAuth
+quickstart](https://developers.google.com/workspace/gmail/api/quickstart/python)
+and [Gmail scope descriptions](https://developers.google.com/workspace/gmail/api/auth/scopes),
+and Microsoft's [MSAL Python token acquisition guide](https://learn.microsoft.com/en-us/entra/msal/python/getting-started/acquiring-tokens).
+
+With an authorized account, mailbox search, reading, attachment listing and
+approval-gated attachment download are available. Messages and attachments are
+untrusted external content; SHU does not execute or open downloaded files.
+
+```powershell
+python -m app.cli email search --query "newer_than:7d"
+python -m app.cli email read MESSAGE_ID
+python -m app.cli email reply MESSAGE_ID
+python -m app.cli email forward MESSAGE_ID --to recipient@example.com
+python -m app.cli email attachments MESSAGE_ID
+python -m app.cli email download-attachment MESSAGE_ID ATTACHMENT_ID
+```
+
+Reply and forward commands print the untrusted source content, recipient,
+message body, forwarded attachment metadata and delivery mode. Type `YES` to
+create the reviewed unsent provider draft. With `--send`, type `SEND` to approve
+the reviewed direct send. Gmail replies include
+the source thread and RFC reply headers, and Gmail forwards carry source files
+within SHU's 15 MB limit. Outlook uses its native reply/forward endpoints.
+Timed-out actions are recorded as unknown; inspect the mailbox before retrying.
+
+Read a public web page in an isolated Chromium, Chrome, Edge or best-effort
+Brave session. Public-page contexts are fresh and cookie-free; the read-only
+page reader, tab session and form preparation disable JavaScript and block
+requests other than GET/HEAD. The reader blocks local and private network
+targets, does not retain downloads, and marks returned page text as untrusted.
+Pages that require JavaScript may return incomplete content. Task plans can use the same read-only tool.
+With a reviewed task plan, SHU can also fill one uniquely labeled, empty text
+field on a public page. That form session has JavaScript disabled and blocks
+non-GET/HEAD requests; SHU never submits the form or enters an authenticated
+session. Sensitive prompts are routed locally by default.
+Task previews show earlier-step dependencies, the tools' required resource
+labels, and a rough serial tool-time estimate. After three successful runs of a
+tool, SHU uses the median of up to 31 measured durations among its latest 1,000
+successful tool runs; before that, it uses the registered default. Only the
+tool name and elapsed milliseconds are added to the audit summary; arguments
+and results are excluded. Estimates are historical guidance, not a runtime or
+completion-time guarantee.
+
+```powershell
+python -m app.cli browser read https://example.com
+python -m app.cli browser read https://example.com --channel msedge
+python -m app.cli browser session --channel chromium
+```
+
+Run the synthetic prompt-injection planner probe with:
+
+```powershell
+python scripts\redteam_task_planner.py
+```
+
+This probe uses only the configured local Qwen model. It drafts plans but never
+saves a task or executes a tool; the ten synthetic cases provide a repeatable
+check, not a complete security proof.
+
+`--channel` accepts `chromium` (the Playwright-installed browser), `chrome`,
+`msedge`, or `brave`. Chrome and Edge must already be installed for their
+channels. Brave is located in standard per-machine or per-user Windows paths
+and passed to Playwright as a custom executable; Playwright does not guarantee
+compatibility with this non-bundled browser, so this option is best-effort.
+The visible tab session supports up to eight temporary tabs with `open URL`,
+`goto TAB_ID URL`, `read TAB_ID`, `tabs`, `close TAB_ID`, and `quit`. It disables
+JavaScript, cookies and downloads and blocks requests other than GET/HEAD.
+Tabs exist only for that session; login and authenticated account workflows are
+not available.
+
+Sending remains a separate exact-preview and digest-confirmation workflow. Email
+attachments must be in SHU's exports or attachments folder; preview includes
+their names, sizes and SHA-256 digests, and each provider has its own size limit.
+Use the local draft path and review its recipient, body and attachments before sending:
+
+```powershell
+python -m app.cli comms draft --channel email
+python -m app.cli comms preview DRAFT_ID
+python -m app.cli comms save-provider-draft DRAFT_ID --digest PREVIEW_DIGEST --confirm
+python -m app.cli comms send DRAFT_ID --digest PREVIEW_DIGEST --confirm
+```
+
+The provider-draft command shows the exact email and attachment preview, checks
+the digest and requires typing `YES`. It saves an unsent copy to Gmail or
+Outlook and never sends it. Related email actions are handled with dedicated
+provider-native commands above.
+
+WhatsApp access tokens may still be entered with hidden input and stored in
+Windows Credential Manager:
+
+```powershell
+python -m app.cli credentials set whatsapp_cloud_api_access_token
+```
+
+No send command is run without reviewing its preview and passing `--confirm`.
+Check current delivery state with `python -m app.cli comms status DRAFT_ID`.
+
+## Approved reusable workflows
+
+Save only a fully completed and verified task as a reusable workflow, then
+inspect the stored workflows and replay one by its ID. Replay prints the exact
+steps, asks for explicit approval, and requests approval again for each
+modifying step.
+
+```powershell
+python -m app.cli tasks save-workflow TASK_ID --name "Monthly report"
+python -m app.cli workflows list
+python -m app.cli workflows replay PROCEDURE_ID
+```

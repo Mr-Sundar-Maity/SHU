@@ -1,0 +1,1 @@
+"""SHU desktop assistant package."""

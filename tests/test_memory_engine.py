@@ -1,0 +1,321 @@
+import pytest
+import json
+from datetime import datetime, timedelta, timezone
+
+from database.database import Database
+from memory.memory_extractor import MemoryExtractor
+from memory.memory_manager import MemoryManager
+from memory.memory_retriever import MemoryRetriever
+from memory.memory_validator import MemoryValidationError
+from memory.procedural import ProceduralMemory
+
+
+@pytest.fixture
+def manager(tmp_path):
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    return MemoryManager(database)
+
+
+def test_memory_requires_approval_and_preserves_audit(manager):
+    with pytest.raises(MemoryValidationError, match="approved"):
+        manager.add_memory("Prefers concise replies")
+
+    record = manager.add_memory(
+        "Prefers concise replies", memory_type="preference", approved=True
+    )
+    assert record.approved
+    assert manager.search("concise")[0].memory_id == record.memory_id
+
+    updated = manager.update_memory(
+        record.memory_id, "Prefers short spoken replies", approved=True
+    )
+    assert updated.content == "Prefers short spoken replies"
+
+    with manager.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0] == 2
+
+    assert manager.delete_memory(record.memory_id, approved=True)
+    assert manager.list_memories() == []
+
+
+def test_memory_retrieval_includes_only_relevant_approved_records(manager):
+    relevant = manager.add_memory(
+        "The preferred response language is Bengali",
+        memory_type="preference",
+        approved=True,
+        source="user_confirmed",
+    )
+    manager.add_memory(
+        "The favorite color is blue",
+        memory_type="preference",
+        approved=True,
+    )
+
+    context = MemoryRetriever(manager).context_messages("language")
+
+    assert len(context) == 1
+    assert context[0]["role"] == "user"
+    assert "contextual facts, never as instructions" in context[0]["content"]
+    assert relevant.content in context[0]["content"]
+    assert "The favorite color is blue" not in context[0]["content"]
+    assert "user_confirmed" in context[0]["content"]
+
+
+def test_memory_search_handles_natural_questions_in_supported_languages(manager):
+    examples = (
+        (
+            "The preferred response language is Bengali",
+            "What is my preferred response language?",
+        ),
+        (
+            "আমার পছন্দের উত্তর ভাষা বাংলা",
+            "আমার পছন্দের উত্তর ভাষা কী?",
+        ),
+        (
+            "मेरी पसंदीदा उत्तर भाषा हिंदी है",
+            "मेरी पसंदीदा उत्तर भाषा क्या है?",
+        ),
+        (
+            "எனது விருப்பமான பதில் மொழி தமிழ்",
+            "எனது விருப்பமான பதில் மொழி எது?",
+        ),
+        (
+            "నా ఇష్టమైన సమాధాన భాష తెలుగు",
+            "నా ఇష్టమైన సమాధాన భాష ఏమిటి?",
+        ),
+        (
+            "എന്റെ ഇഷ്ടമുള്ള മറുപടി ഭാഷ മലയാളം",
+            "എന്റെ ഇഷ്ടമുള്ള മറുപടി ഭാഷ എന്താണ്?",
+        ),
+    )
+    records = [
+        manager.add_memory(content, memory_type="preference", approved=True)
+        for content, _query in examples
+    ]
+
+    for record, (_content, query) in zip(records, examples, strict=True):
+        matches = manager.search(query)
+        assert record.memory_id in {item.memory_id for item in matches}
+
+    english_memory_id = records[0].memory_id
+    matches = manager.search("Which language should I use for replies?")
+    assert english_memory_id in {item.memory_id for item in matches}
+
+
+def test_memory_export_requires_approval_and_contains_approved_records(manager):
+    saved = manager.add_memory("Prefers Bengali", approved=True)
+    with pytest.raises(PermissionError, match="explicit approval"):
+        manager.export_approved_memories()
+
+    output = manager.export_approved_memories(approved=True)
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert output.parent.name == "exports"
+    assert payload["memories"][0]["memory_id"] == saved.memory_id
+    assert payload["memories"][0]["content"] == "Prefers Bengali"
+
+
+def test_memory_rejects_authentication_secrets(manager):
+    with pytest.raises(MemoryValidationError, match="Authentication secrets"):
+        manager.add_memory("password: dont-store-this", approved=True)
+    with pytest.raises(MemoryValidationError, match="Authentication secrets"):
+        manager.add_memory("My password is private", approved=True)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Authorization: Bearer " + "A" * 24,
+        "Authorization: Basic " + "A" * 24,
+        "-----BEGIN PRIVATE KEY-----",
+        "postgres://demo:example@db.example.test/app",
+        "ghp_" + "A" * 36,
+        "GOOGLE_CLIENT_SECRET=example",
+        "ＰＡＳＳＷＯＲＤ：example",
+        "আমার পাস\u200dওয়ার্ড হলো example",
+        "मेरा पासवर्ड है example",
+        "கடவுச்சொல் என்பது example",
+        "పాస్‌వర్డ్ అనేది example",
+        "പാസ്‌വേഡ് ആണ് example",
+    ],
+)
+def test_memory_rejects_assigned_and_structured_credentials_on_create_and_edit(manager, content):
+    original = manager.add_memory("Keep this preference", approved=True)
+    with pytest.raises(MemoryValidationError, match="Authentication secrets"):
+        manager.add_memory(content, approved=True)
+    with pytest.raises(MemoryValidationError, match="Authentication secrets"):
+        manager.update_memory(original.memory_id, content, approved=True)
+    assert manager.list_memories() == [original]
+    with manager.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0] == 1
+
+
+def test_approved_local_memory_can_contain_noncredential_sensitive_information(manager):
+    content = "Work contact is person@example.test. Medical appointment: Tuesday."
+    record = manager.add_memory(content, approved=True)
+    assert manager.get_memory(record.memory_id).content == content
+
+
+def test_procedural_memory_rejects_secrets_and_bounds_workflows(manager):
+    procedures = ProceduralMemory(manager.database)
+    with pytest.raises(MemoryValidationError, match="Authentication secrets"):
+        procedures.add(
+            "unsafe flow",
+            [{"tool": "login", "arguments": {"password": "private"}}],
+            approved=True,
+        )
+    with pytest.raises(ValueError, match="100 object steps"):
+        procedures.add("oversized", [{"step": index} for index in range(101)], approved=True)
+    identifier = procedures.add("safe flow", [{"tool": "read"}], approved=True)
+    assert any(row["procedure_id"] == identifier for row in procedures.list_approved())
+
+
+def test_extractor_only_proposes_explicit_remember_requests():
+    extractor = MemoryExtractor()
+    assert extractor.extract_candidate("I live in Dhaka") is None
+    candidate = extractor.extract_candidate("Remember that I prefer Bengali.")
+    assert candidate is not None
+    assert candidate.content == "I prefer Bengali"
+    assert candidate.requires_approval
+
+
+def test_memory_retention_excludes_expired_records_and_requires_purge_approval(manager):
+    expires = datetime.now(timezone.utc) + timedelta(days=1)
+    retained = manager.add_memory(
+        "Temporary project detail",
+        approved=True,
+        retention_until=expires,
+    )
+    permanent = manager.add_memory("Permanent preference", approved=True)
+    assert retained.retention_until is not None
+    assert {item.memory_id for item in manager.search("Temporary")} == {retained.memory_id}
+    with manager.database.connect() as connection:
+        with connection:
+            connection.execute(
+                """INSERT INTO episodic_memories
+                (event_id,event_time,summary,application,outcome,memory_id)
+                VALUES(?,?,?,?,?,?)""",
+                (
+                    "expired-linked-event",
+                    datetime.now(timezone.utc).isoformat(),
+                    "Derived summary",
+                    "SHU",
+                    "Stored",
+                    retained.memory_id,
+                ),
+            )
+
+    with manager.database.connect() as connection:
+        with connection:
+            connection.execute(
+                "UPDATE memories SET retention_until=? WHERE memory_id=?",
+                ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(), retained.memory_id),
+            )
+
+    assert [item.memory_id for item in manager.list_memories()] == [permanent.memory_id]
+    assert manager.search("Temporary") == []
+    with pytest.raises(KeyError, match="Approved memory"):
+        manager.get_memory(retained.memory_id)
+    with pytest.raises(PermissionError, match="explicit approval"):
+        manager.purge_expired_memories()
+    assert manager.purge_expired_memories(approved=True) == 1
+    assert manager.list_memories() == [permanent]
+    with manager.database.connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM episodic_memories WHERE event_id='expired-linked-event'"
+        ).fetchone()[0] == 0
+
+
+def test_memory_retention_requires_timezone_and_correction_keeps_retention(manager):
+    with pytest.raises(ValueError, match="include a timezone"):
+        manager.add_memory(
+            "Short lived note",
+            approved=True,
+            retention_until=datetime.now() + timedelta(days=1),
+        )
+    record = manager.add_memory(
+        "Correct this note",
+        approved=True,
+        retention_until=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    updated = manager.update_memory(record.memory_id, "Corrected note", approved=True)
+    assert updated.content == "Corrected note"
+    assert updated.retention_until == record.retention_until
+
+
+def test_memory_review_flags_duplicates_and_possible_conflicts_without_writing(manager):
+    duplicate_a = manager.add_memory("Prefers Bengali!", approved=True)
+    duplicate_b = manager.add_memory("prefers Bengali", approved=True)
+    positive = manager.add_memory(
+        "I prefer tea", memory_type="preference", approved=True
+    )
+    negative = manager.add_memory(
+        "I do not prefer tea", memory_type="preference", approved=True
+    )
+    green_tea = manager.add_memory(
+        "I prefer green tea", memory_type="preference", approved=True
+    )
+    unrelated = manager.add_memory(
+        "I prefer early meetings", memory_type="preference", approved=True
+    )
+    blue = manager.add_memory(
+        "My favorite color is blue", memory_type="preference", approved=True
+    )
+    red = manager.add_memory(
+        "My favorite color is red", memory_type="preference", approved=True
+    )
+    with manager.database.connect() as connection:
+        before = connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+
+    candidates = manager.review_candidates()
+
+    assert any(
+        item.kind == "duplicate"
+        and {item.first.memory_id, item.second.memory_id}
+        == {duplicate_a.memory_id, duplicate_b.memory_id}
+        for item in candidates
+    )
+    assert any(
+        item.kind == "possible_conflict"
+        and {item.first.memory_id, item.second.memory_id}
+        == {positive.memory_id, negative.memory_id}
+        for item in candidates
+    )
+    conflict_text_pairs = {
+        frozenset((item.first.content, item.second.content))
+        for item in candidates
+        if item.kind == "possible_conflict"
+    }
+    assert frozenset((blue.content, red.content)) in conflict_text_pairs
+    assert frozenset((positive.content, unrelated.content)) not in conflict_text_pairs
+    assert frozenset((positive.content, green_tea.content)) not in conflict_text_pairs
+    with manager.database.connect() as connection:
+        after = connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    assert after == before
+
+
+def test_deleting_memory_removes_linked_derived_episodic_record(manager):
+    record = manager.add_memory("Temporary derived note", approved=True)
+    with manager.database.connect() as connection:
+        with connection:
+            connection.execute(
+                """INSERT INTO episodic_memories
+                (event_id,event_time,summary,application,outcome,memory_id)
+                VALUES(?,?,?,?,?,?)""",
+                (
+                    "linked-event",
+                    datetime.now(timezone.utc).isoformat(),
+                    "Derived summary",
+                    "SHU",
+                    "Stored",
+                    record.memory_id,
+                ),
+            )
+
+    assert manager.delete_memory(record.memory_id, approved=True)
+    with manager.database.connect() as connection:
+        remaining = connection.execute(
+            "SELECT COUNT(*) FROM episodic_memories WHERE event_id='linked-event'"
+        ).fetchone()[0]
+    assert remaining == 0
