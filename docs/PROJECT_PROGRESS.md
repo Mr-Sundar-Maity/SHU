@@ -21,6 +21,9 @@ token and missing trained `Hey SHU` model.
 - Phase 18. `scripts\verify.ps1` passed 591 tests in 39.32 seconds,
   dependency and compile checks, SQLite integrity at schema v5, and Doctor.
   The remaining Doctor warnings are the WhatsApp token and trained wake model.
+- The enabled GitHub workflow created a check for r7 source commit `4494ba8`.
+  GitHub again reported an account billing lock before assigning a runner, so
+  hosted installation and tests remain unverified. [r7 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45688064116)
 - Phases 4 and 18. Five trials took an existing 1.945-second synthetic
   English WAV through `SHUVoiceAssistant`, cached Whisper small and loopback
   `qwen2.5:1.5b`. All five matched the fixture and produced a nonempty reply at

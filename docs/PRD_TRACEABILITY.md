@@ -50,9 +50,9 @@ local Qwen fallback works. None of these checks closes the outstanding target-
 device, live-account, human-language-quality or physical-recovery acceptance
 items listed below.
 
-GitHub Actions created the first Windows CI run and recorded a failure before
+GitHub Actions created the r7 Windows CI check and recorded a failure before
 runner assignment. The check reports an account billing lock. Hosted clean
-installation and tests remain open. [Windows CI run 45685254990](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45685254990)
+installation and tests remain open. [r7 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45688064116)
 
 ## Next practical checkpoints
 
