@@ -21,6 +21,9 @@ token and missing trained `Hey SHU` model.
 - Phase 18. Full `scripts\verify.ps1` passed 613 tests in 39.25 seconds,
   dependency and compile checks, SQLite integrity at schema v5 and Doctor.
   Doctor still reports the missing WhatsApp token and trained wake model.
+- The hosted Windows check for r8 source commit `99b4255` again ended before
+  the runner started. GitHub's annotation reports an account billing lock.
+  [r8 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45690641058)
 - Phases 4 and 18. `scripts\benchmark_voice.py` makes the synthetic voice
   latency test repeatable for a consented WAV. It uses cached Whisper and an
   installed loopback Ollama model with a silent speech sink. Three trials of
