@@ -1,5 +1,6 @@
 ﻿import json
 import os
+import gc
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -8,7 +9,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QDateTime, QTimeZone, Qt
+from PySide6.QtCore import QDateTime, QEvent, QTimeZone, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -22,6 +23,21 @@ from app.interface.dashboard import (
     _ReminderSpeechWorker,
     _TaskWorker,
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def keep_qapplication_alive():
+    """Keep the main-thread Qt application alive through later worker-thread tests."""
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(scope="module", autouse=True)
+def dispose_dashboard_objects(keep_qapplication_alive):
+    yield
+    # Dispose of Qt wrappers on the GUI thread before other tests start workers.
+    keep_qapplication_alive.processEvents()
+    keep_qapplication_alive.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    gc.collect()
 
 
 def test_chat_worker_reports_provider_model_and_response(monkeypatch, tmp_path):
@@ -475,20 +491,32 @@ def test_dashboard_mute_control_is_visible_and_reversible(tmp_path):
         assert "without speaking" in window.quiet_mode.accessibleDescription()
         assert window.stop_button.accessibleName() == "Emergency stop"
         assert "Stop active SHU automation" in window.stop_button.accessibleDescription()
+        assert window.voice_activity.accessibleName() == "Voice activity"
+        window._voice_activity_received("recording")
+        assert window.voice_activity.text() == "Recording microphone"
         window._toggle_voice_mute()
         assert assistant.is_muted
         assert window.voice_mute_button.text() == "Unmute microphone"
-        assert window.status.text() == "Microphone muted"
+        window._voice_activity_received("recording")
+        assert window.voice_activity.text() == "Microphone muted"
 
         window._toggle_voice_mute()
         assert not assistant.is_muted
         assert window.voice_mute_button.text() == "Mute microphone"
-        assert window.status.text() == "Listening | microphone active"
+        assert window.voice_activity.text() == "Preparing microphone"
+
+        window._voice_activity_received("transcribing")
+        assert window.voice_activity.text() == "Transcribing speech"
+        window._voice_activity_received("thinking")
+        assert window.voice_activity.text() == "Thinking about your request"
+        window._voice_activity_received("speech_output")
+        assert window.voice_activity.text() == "Preparing or playing speech"
 
         window.voice_pause_button.setEnabled(True)
         window._toggle_voice_pause()
         assert assistant.tts.paused
         assert window.voice_pause_button.text() == "Resume speech"
+        assert window.voice_activity.text() == "Speech paused"
         window._toggle_voice_pause()
         assert not assistant.tts.paused
         assert window.voice_pause_button.text() == "Pause speech"

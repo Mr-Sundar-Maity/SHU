@@ -253,6 +253,7 @@ def register_safe_desktop_tools(
     automation: WindowsAutomation,
     office_service=None,
 ) -> None:
+    copy_keys = _only_keys({"source", "destination", "expected_sha256"})
     registry.register(
         ToolSpec(
             name="list_allowed_files",
@@ -261,6 +262,32 @@ def register_safe_desktop_tools(
             handler=automation.list_allowed_files,
             validator=_only_keys({"directory"}),
             estimate_seconds=3,
+            resources=("filesystem",),
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="preview_allowed_file",
+            description="Show the path, size and SHA-256 of a file in an approved SHU directory",
+            risk=RiskLevel.READ_ONLY,
+            handler=automation.preview_allowed_file,
+            validator=_only_keys({"path"}),
+            estimate_seconds=3,
+            resources=("filesystem",),
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="copy_allowed_file",
+            description="Copy an approved file to an unused path using its previewed SHA-256",
+            risk=RiskLevel.MODIFICATION,
+            handler=lambda **arguments: automation.copy_allowed_file(**arguments, approved=True),
+            validator=lambda args: automation.validate_copy_arguments(**copy_keys(args)),
+            verifier=lambda result, args: (
+                result["destination"] == args["destination"]
+                and result["sha256"] == args["expected_sha256"]
+            ),
+            estimate_seconds=5,
             resources=("filesystem",),
         )
     )

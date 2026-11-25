@@ -42,6 +42,7 @@ from app.logging_config import setup_logging
 from app.security.privacy import is_sensitive_text
 from app.security.credentials import WindowsCredentialStore
 from app.security.emergency_stop import EmergencyStop
+from app.security.policy import PolicyDenied
 from app.voice.language_config import SUPPORTED_LANGUAGES
 from app.voice.audio_diagnostics import capture_input_level
 from app.tasks.executor import TaskExecutor
@@ -717,6 +718,52 @@ def browser_read(url: str, channel: str = "chromium") -> int:
     return 0
 
 
+def file_preview(path: str) -> int:
+    try:
+        _planner, executor = _task_services()
+        result = executor.registry.execute("preview_allowed_file", {"path": path})
+    except (PermissionError, ValueError) as error:
+        print("Could not preview the file:", str(error))
+        return 1
+    except OSError as error:
+        print("Could not preview the file:", type(error).__name__)
+        return 1
+    print(json.dumps(result.value, ensure_ascii=False, indent=2))
+    return 0
+
+
+def file_copy(source: str, destination: str, sha256: str, *, confirmed: bool) -> int:
+    def confirm(_name, arguments, _risk):
+        print("Copy preview (the source is kept and existing files are protected):")
+        print(json.dumps(arguments, ensure_ascii=False, indent=2))
+        if not confirmed:
+            print("Run again with --confirm to approve this copy.")
+            return False
+        try:
+            return input("Copy the reviewed bytes to this path? Type YES: ").strip() == "YES"
+        except EOFError:
+            return False
+
+    try:
+        _planner, executor = _task_services()
+        result = executor.registry.execute(
+            "copy_allowed_file",
+            {"source": source, "destination": destination, "expected_sha256": sha256},
+            confirm=confirm,
+        )
+    except PolicyDenied:
+        print("File was not copied.")
+        return 2
+    except (PermissionError, ValueError) as error:
+        print("Could not copy the file:", str(error))
+        return 1
+    except OSError as error:
+        print("Could not copy the file:", type(error).__name__)
+        return 1
+    print(json.dumps(result.value, ensure_ascii=False, indent=2))
+    return 0
+
+
 def browser_session(channel: str = "chromium") -> int:
     print("SHU opens public pages in isolated tabs. Cookies, JavaScript and form submission are disabled.")
     print("Commands: open URL | goto TAB_ID URL | read TAB_ID | tabs | close TAB_ID | quit")
@@ -1381,6 +1428,16 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "logout":
             action_parser.add_argument("--confirm-delete", action="store_true")
 
+    files_parser = commands.add_parser("files", help="preview and copy files inside SHU exports")
+    files_sub = files_parser.add_subparsers(dest="file_action", required=True)
+    file_preview_parser = files_sub.add_parser("preview", help="show file size and SHA-256")
+    file_preview_parser.add_argument("path")
+    file_copy_parser = files_sub.add_parser("copy", help="copy reviewed bytes to an unused path")
+    file_copy_parser.add_argument("source")
+    file_copy_parser.add_argument("destination")
+    file_copy_parser.add_argument("--sha256", required=True)
+    file_copy_parser.add_argument("--confirm", action="store_true")
+
     task_parser = commands.add_parser(
         "tasks", help="queue, inspect, execute and safely recover tasks"
     )
@@ -1546,6 +1603,10 @@ def main(argv: list[str] | None = None) -> int:
             args.email_auth_action,
             confirmed=getattr(args, "confirm_delete", False),
         )
+    if args.command == "files":
+        if args.file_action == "preview":
+            return file_preview(args.path)
+        return file_copy(args.source, args.destination, args.sha256, confirmed=args.confirm)
     if args.command == "tasks":
         if args.task_action == "queue":
             return task_queue(args.limit)

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import hashlib
 import subprocess
 import sys
 from unittest.mock import Mock
@@ -102,6 +103,89 @@ def automation_for(monkeypatch, windows, tmp_path):
         [tmp_path],
         desktop_factory=lambda: FakeDesktop(windows),
     )
+
+
+def test_copy_allowed_file_requires_approval_and_verifies_reviewed_bytes(tmp_path):
+    root = tmp_path / "exports"
+    root.mkdir()
+    source, target = root / "note.txt", root / "note copy.txt"
+    data = b"Synthetic file content"
+    source.write_bytes(data)
+    automation = WindowsAutomation([root])
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    registry = ToolRegistry(database)
+    register_safe_desktop_tools(registry, automation)
+    preview = registry.execute("preview_allowed_file", {"path": str(source)})
+    assert preview.value == {
+        "path": str(source), "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    arguments = {"source": str(source), "destination": str(target), "expected_sha256": preview.value["sha256"]}
+
+    with pytest.raises(PolicyDenied):
+        registry.execute("copy_allowed_file", arguments)
+    assert not target.exists()
+
+    def approve(tool, shown_arguments, risk):
+        assert tool == "copy_allowed_file"
+        assert shown_arguments == arguments
+        assert risk == RiskLevel.MODIFICATION
+        return True
+
+    copied = registry.execute("copy_allowed_file", arguments, confirm=approve)
+    assert copied.verified
+    assert copied.value["size"] == len(data)
+    assert source.read_bytes() == target.read_bytes() == data
+    assert not source.samefile(target)
+    assert not list(root.glob(".shu-copy-*.part"))
+
+
+def test_copy_allowed_file_refuses_existing_target_and_stale_preview(tmp_path):
+    source, target = tmp_path / "source.txt", tmp_path / "existing.txt"
+    source.write_text("Reviewed bytes", encoding="utf-8")
+    target.write_text("Existing bytes", encoding="utf-8")
+    automation = WindowsAutomation([tmp_path])
+    digest = automation.preview_allowed_file(source)["sha256"]
+
+    with pytest.raises(FileExistsError):
+        automation.copy_allowed_file(str(source), str(target), digest, approved=True)
+    assert target.read_text(encoding="utf-8") == "Existing bytes"
+
+    source.write_text("Changed bytes", encoding="utf-8")
+    unused = tmp_path / "unused.txt"
+    with pytest.raises(ValueError, match="source changed since preview"):
+        automation.copy_allowed_file(str(source), str(unused), digest, approved=True)
+    assert not unused.exists()
+
+
+def test_file_tools_refuse_paths_outside_allowed_root(tmp_path):
+    root = tmp_path / "exports"
+    root.mkdir()
+    source = root / "source.txt"
+    source.write_text("Approved bytes", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("Other bytes", encoding="utf-8")
+    automation = WindowsAutomation([root])
+
+    with pytest.raises(PermissionError, match="allowed directories"):
+        automation.preview_allowed_file(outside)
+    digest = automation.preview_allowed_file(source)["sha256"]
+    with pytest.raises(PermissionError, match="allowed directories"):
+        automation.copy_allowed_file(str(source), str(outside), digest, approved=True)
+    assert outside.read_text(encoding="utf-8") == "Other bytes"
+
+
+def test_failed_staging_verification_never_publishes_copy(monkeypatch, tmp_path):
+    source, target = tmp_path / "source.txt", tmp_path / "target.txt"
+    source.write_text("Reviewed bytes", encoding="utf-8")
+    automation = WindowsAutomation([tmp_path])
+    digest = automation.preview_allowed_file(source)["sha256"]
+
+    monkeypatch.setattr("app.automation.windows.hashlib.file_digest", lambda *_args: hashlib.sha256(b"wrong"))
+    with pytest.raises(OSError, match="Staged copy did not match"):
+        automation.copy_allowed_file(str(source), str(target), digest, approved=True)
+    assert not target.exists()
+    assert not list(tmp_path.glob(".shu-copy-*.part"))
 
 
 def test_inspect_window_returns_bounded_metadata_without_control_values(monkeypatch, tmp_path):

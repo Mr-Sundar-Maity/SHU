@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import threading
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -54,6 +55,7 @@ class SHUSTTEngine:
         *,
         stop_event: threading.Event | None = None,
         mute_event: threading.Event | None = None,
+        on_started: Callable[[], None] | None = None,
     ) -> np.ndarray:
         """Record a mono float32 audio clip from the selected microphone."""
         if duration <= 0:
@@ -73,6 +75,8 @@ class SHUSTTEngine:
                 device=self.device_index,
                 blocksize=blocksize,
             ) as stream:
+                if on_started is not None:
+                    on_started()
                 while captured < max_samples:
                     if (stop_event is not None and stop_event.is_set()) or (
                         mute_event is not None and mute_event.is_set()
@@ -100,6 +104,8 @@ class SHUSTTEngine:
             dtype="float32",
             device=self.device_index,
         )
+        if on_started is not None:
+            on_started()
         sd.wait()
         return np.squeeze(audio)
 
@@ -112,6 +118,7 @@ class SHUSTTEngine:
         min_speech_seconds: float = 0.25,
         stop_event: threading.Event | None = None,
         mute_event: threading.Event | None = None,
+        on_started: Callable[[], None] | None = None,
     ) -> np.ndarray:
         """Record a phrase until a short RMS-based silence interval is detected."""
         if max_duration <= 0 or silence_seconds <= 0 or min_speech_seconds < 0:
@@ -133,6 +140,8 @@ class SHUSTTEngine:
             device=self.device_index,
             blocksize=blocksize,
         ) as stream:
+            if on_started is not None:
+                on_started()
             captured = 0
             while captured < max_samples and not (
                 stop_event is not None and stop_event.is_set()
@@ -235,29 +244,37 @@ class SHUSTTEngine:
         dynamic: bool = False,
         stop_event: threading.Event | None = None,
         mute_event: threading.Event | None = None,
+        on_activity: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """Record speech and transcribe it in the selected or detected language."""
         if (stop_event is not None and stop_event.is_set()) or (
             mute_event is not None and mute_event.is_set()
         ):
             return self.transcribe(np.empty(0, dtype=np.float32), language=language)
+        capture_options = {}
+        if on_activity is not None:
+            capture_options["on_started"] = lambda: on_activity("recording")
         audio = (
             self.record_until_silence(
                 max_duration=duration,
                 stop_event=stop_event,
                 mute_event=mute_event,
+                **capture_options,
             )
             if dynamic
             else self.record_audio(
                 duration,
                 stop_event=stop_event,
                 mute_event=mute_event,
+                **capture_options,
             )
         )
         if (stop_event is not None and stop_event.is_set()) or (
             mute_event is not None and mute_event.is_set()
         ):
             audio = np.empty(0, dtype=np.float32)
+        if on_activity is not None:
+            on_activity("transcribing")
         print("\nSHU: Processing your voice...")
         result = self.transcribe(audio, language=language, stop_event=stop_event)
         print("\nRecognized Text:", result["text"])

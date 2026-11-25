@@ -139,6 +139,7 @@ class _ChatWorker(QObject):
 
 class _VoiceWorker(QObject):
     finished = Signal(str)
+    activity = Signal(str)
 
     def __init__(self, assistant: SHUVoiceAssistant, language: str | None) -> None:
         super().__init__()
@@ -148,7 +149,9 @@ class _VoiceWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            self.assistant.start(language=self.language, dynamic_recording=True)
+            self.assistant.start(
+                language=self.language, dynamic_recording=True, on_activity=self.activity.emit
+            )
             self.finished.emit("")
         except Exception as error:
             self.finished.emit(type(error).__name__)
@@ -276,6 +279,7 @@ class _NotificationBridge(QObject):
 
 class SHUDashboard(QMainWindow):
     voice_turn = Signal(str, str)
+    voice_stop_activity = Signal()
     task_progress = Signal(int, int, str, str)
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -316,6 +320,9 @@ class SHUDashboard(QMainWindow):
         self._threads: dict[QThread, QObject] = {}
         self._closing = False
         self._voice_assistant: SHUVoiceAssistant | None = None
+        self._voice_stage = "starting"
+        self._voice_muted = False
+        self._voice_barge_in = False
         self.emergency_stop.add_callback(self._stop_active_voice)
         self._voice_speech_paused = False
         self._reminder_speech_active = False
@@ -345,6 +352,7 @@ class SHUDashboard(QMainWindow):
                 "inspect with `python -m app.cli tasks status TASK_ID`."
             )
         self.voice_turn.connect(self._voice_turn_received)
+        self.voice_stop_activity.connect(self._refresh_voice_activity)
         self.task_progress.connect(self._show_task_progress)
         self._setup_notifications()
         overdue = self.reminders.start()
@@ -361,6 +369,9 @@ class SHUDashboard(QMainWindow):
         self.status = QLabel("Ready | local-first | action tools require approval")
         self.status.setAccessibleName("SHU status")
         layout.addWidget(self.status)
+        self.voice_activity = QLabel("Voice idle")
+        self.voice_activity.setAccessibleName("Voice activity")
+        layout.addWidget(self.voice_activity)
 
         self.tabs = QTabWidget()
         self.tabs.setAccessibleName("SHU sections")
@@ -1530,8 +1541,12 @@ class SHUDashboard(QMainWindow):
         self._update_voice_plan_button()
         self.emergency_stop.reset()
         language = self.language_combo.currentData()
+        settings = self._runtime_settings()
+        self._voice_stage = "starting"
+        self._voice_muted = False
+        self._voice_barge_in = settings.voice_barge_in
         self._voice_assistant = SHUVoiceAssistant(
-            settings=self._runtime_settings(),
+            settings=settings,
             on_turn=lambda question, answer: self.voice_turn.emit(question, answer),
         )
         self._voice_speech_paused = False
@@ -1541,15 +1556,52 @@ class SHUDashboard(QMainWindow):
         self.voice_mute_button.setText("Mute microphone")
         self.voice_pause_button.setEnabled(True)
         self.voice_pause_button.setText("Pause speech")
-        self.status.setText("Listening | microphone active")
-        self._run_worker(
-            _VoiceWorker(self._voice_assistant, language),
-            self._voice_finished,
-        )
+        self._refresh_voice_activity()
+        self.status.setText("Voice session active")
+        worker = _VoiceWorker(self._voice_assistant, language)
+        worker.activity.connect(self._voice_activity_received)
+        self._run_worker(worker, self._voice_finished)
+
+    @Slot(str)
+    def _voice_activity_received(self, stage: str) -> None:
+        if self._closing or self._voice_assistant is None:
+            return
+        if stage == "recording" and self._voice_muted:
+            return
+        self._voice_stage = stage
+        self._refresh_voice_activity()
+
+    @Slot()
+    def _refresh_voice_activity(self) -> None:
+        if self._voice_assistant is None:
+            label = "Voice idle"
+        elif self.emergency_stop.is_stopped:
+            label = "Voice stopping"
+        else:
+            label = {
+                "starting": "Starting voice session",
+                "wake_word": "Waiting for wake word",
+                "listening": "Preparing microphone",
+                "recording": "Recording microphone",
+                "transcribing": "Transcribing speech",
+                "thinking": "Thinking about your request",
+                "speech_output": "Preparing or playing speech",
+            }[self._voice_stage]
+            if self._voice_stage == "speech_output" and self._voice_speech_paused:
+                label = "Speech paused"
+            if self._voice_muted:
+                if self._voice_stage in {"wake_word", "listening", "recording"}:
+                    label = "Microphone muted"
+                else:
+                    label += " | microphone muted"
+            elif self._voice_stage == "speech_output" and self._voice_barge_in:
+                label += " | voice interruptions enabled"
+        self.voice_activity.setText(label)
 
     @Slot(str)
     def _voice_finished(self, error: str) -> None:
         self._voice_assistant = None
+        self._refresh_voice_activity()
         if self._closing:
             return
         self.voice_button.setEnabled(True)
@@ -1575,15 +1627,17 @@ class SHUDashboard(QMainWindow):
             return
         muted = not assistant.is_muted
         assistant.set_muted(muted)
+        self._voice_muted = muted
+        if self._voice_stage == "recording":
+            self._voice_stage = "listening"
         self.voice_mute_button.setText("Unmute microphone" if muted else "Mute microphone")
-        self.status.setText(
-            "Microphone muted" if muted else "Listening | microphone active"
-        )
+        self._refresh_voice_activity()
 
     def _stop_active_voice(self) -> None:
         assistant = self._voice_assistant
         if assistant is not None:
             assistant.request_stop()
+            self.voice_stop_activity.emit()
 
     def _toggle_voice_pause(self) -> None:
         assistant = self._voice_assistant
@@ -1599,6 +1653,7 @@ class SHUDashboard(QMainWindow):
             self._voice_speech_paused = True
             self.voice_pause_button.setText("Resume speech")
             self.status.setText("Speech paused")
+        self._refresh_voice_activity()
 
     def _emergency_stop(self) -> None:
         self.emergency_stop.trigger()

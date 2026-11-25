@@ -18,6 +18,9 @@ from memory.memory_config import DEFAULT_CONFIDENCE
 from memory.memory_validator import validate_memory
 
 _UNSET = object()
+_ACTIVE_MEMORY = (
+    "approved = 1 AND (retention_until IS NULL OR julianday(retention_until) > julianday(?))"
+)
 _REVIEW_NEGATIONS = {
     "not", "no", "never", "don't", "doesn't", "isn't", "cannot", "can't",
     "nahi", "nahin", "nahiin", "mat", "nahi", "না", "নয়", "নয়", "নেই",
@@ -63,7 +66,7 @@ class MemoryReviewCandidate:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _record(row: sqlite3.Row) -> MemoryRecord:
@@ -106,14 +109,15 @@ class MemoryManager:
             approved=approved,
         )
         memory_id = str(uuid.uuid4())
-        timestamp = _now()
-        retention = _normalize_retention(retention_until)
         with self.database.connect() as connection:
             with connection:
-                connection.execute(
+                connection.execute("BEGIN IMMEDIATE")
+                retention = _normalize_retention(retention_until)
+                timestamp = _now()
+                saved = connection.execute(
                     """INSERT INTO memories
                     (memory_id,type,content,source,sensitivity,confidence,approved,created_at,updated_at,retention_until)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING *""",
                     (
                         memory_id,
                         memory_type,
@@ -126,18 +130,20 @@ class MemoryManager:
                         timestamp,
                         retention,
                     ),
-                )
+                ).fetchone()
                 self._audit(connection, memory_id, "memory.create", "success")
-        return self.get_memory(memory_id)
+                return _record(saved)
 
     def get_memory(self, memory_id: str) -> MemoryRecord:
-        now = _now()
         with self.database.connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM memories WHERE memory_id = ? AND approved = 1 "
-                "AND (retention_until IS NULL OR julianday(retention_until) > julianday(?))",
-                (memory_id, now),
-            ).fetchone()
+            return self._read_approved_memory(connection, memory_id)
+
+    @staticmethod
+    def _read_approved_memory(connection: sqlite3.Connection, memory_id: str) -> MemoryRecord:
+        row = connection.execute(
+            f"SELECT * FROM memories WHERE memory_id = ? AND {_ACTIVE_MEMORY}",
+            (memory_id, _now()),
+        ).fetchone()
         if row is None:
             raise KeyError("Approved memory not found")
         return _record(row)
@@ -157,24 +163,27 @@ class MemoryManager:
         return [_record(row) for row in rows]
 
     def search(self, query: str, *, limit: int = 10) -> list[MemoryRecord]:
-        terms = _memory_query_terms(query)[:20]
+        terms = set(_memory_query_terms(query)[:20])
         if not terms:
             return []
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
-        score = " + ".join(
-            "CASE WHEN content LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END"
-            for _ in terms
-        )
-        where = " OR ".join("content LIKE ? ESCAPE '\\'" for _ in terms)
-        values = tuple("%" + _escape_like(term) + "%" for term in terms)
-        now = _now()
+
+        def relevance(content: str) -> int:
+            return len(terms.intersection(_word_tokens(content)))
+
         with self.database.connect() as connection:
+            connection.create_function("shu_memory_relevance", 1, relevance, deterministic=True)
             rows = connection.execute(
-                f"SELECT *, ({score}) AS relevance FROM memories WHERE approved = 1 "
-                f"AND (retention_until IS NULL OR julianday(retention_until) > julianday(?)) "
-                f"AND ({where}) ORDER BY relevance DESC, confidence DESC, updated_at DESC LIMIT ?",
-                (*values, now, *values, limit),
+                f"""WITH scored AS MATERIALIZED (
+                    SELECT memory_id, shu_memory_relevance(content) AS score
+                    FROM memories WHERE {_ACTIVE_MEMORY}
+                )
+                SELECT memories.* FROM scored JOIN memories USING (memory_id)
+                WHERE score > 0
+                ORDER BY score DESC, confidence DESC, updated_at DESC, memory_id
+                LIMIT ?""",
+                (_now(), limit),
             ).fetchall()
         return [_record(row) for row in rows]
 
@@ -255,41 +264,48 @@ class MemoryManager:
         sensitivity: str | None = None,
         retention_until: str | datetime | None | object = _UNSET,
     ) -> MemoryRecord:
-        current = self.get_memory(memory_id)
-        new_confidence = current.confidence if confidence is None else confidence
-        new_sensitivity = current.sensitivity if sensitivity is None else sensitivity
-        validate_memory(
-            content=content,
-            memory_type=current.memory_type,
-            sensitivity=new_sensitivity,
-            confidence=new_confidence,
-            approved=approved,
-        )
-        retention = (
-            current.retention_until
-            if retention_until is _UNSET
-            else _normalize_retention(retention_until)
-        )
         with self.database.connect() as connection:
             with connection:
-                connection.execute(
-                    "UPDATE memories SET content=?, sensitivity=?, confidence=?, updated_at=?, retention_until=? WHERE memory_id=?",
-                    (content.strip(), new_sensitivity, new_confidence, _now(), retention, memory_id),
+                # A correction inherits metadata from the same locked row it updates.
+                connection.execute("BEGIN IMMEDIATE")
+                current = self._read_approved_memory(connection, memory_id)
+                new_confidence = current.confidence if confidence is None else confidence
+                new_sensitivity = current.sensitivity if sensitivity is None else sensitivity
+                validate_memory(
+                    content=content,
+                    memory_type=current.memory_type,
+                    sensitivity=new_sensitivity,
+                    confidence=new_confidence,
+                    approved=approved,
                 )
+                retention = (
+                    current.retention_until
+                    if retention_until is _UNSET
+                    else _normalize_retention(retention_until)
+                )
+                timestamp = _now()
+                updated = connection.execute(
+                    f"""UPDATE memories SET content=?, sensitivity=?, confidence=?,
+                    updated_at=?, retention_until=? WHERE memory_id=? AND {_ACTIVE_MEMORY}
+                    RETURNING *""",
+                    (content.strip(), new_sensitivity, new_confidence, timestamp, retention, memory_id, timestamp),
+                ).fetchone()
+                if updated is None:
+                    raise KeyError("Approved memory not found")
                 self._audit(connection, memory_id, "memory.update", "success")
-        return self.get_memory(memory_id)
+                return _record(updated)
 
     def purge_expired_memories(self, *, approved: bool = False) -> int:
         """Delete records past their explicitly configured retention date."""
         if not approved:
             raise PermissionError("Purging expired memories requires explicit approval")
-        now = _now()
         with self.database.connect() as connection:
             with connection:
+                connection.execute("BEGIN IMMEDIATE")
                 rows = connection.execute(
                     "SELECT memory_id FROM memories WHERE retention_until IS NOT NULL "
                     "AND julianday(retention_until) <= julianday(?)",
-                    (now,),
+                    (_now(),),
                 ).fetchall()
                 for row in rows:
                     connection.execute(
@@ -383,12 +399,8 @@ class MemoryManager:
         )
 
 
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def _memory_query_terms(query: str) -> list[str]:
-    normalized = unicodedata.normalize("NFKC", query).casefold()
+def _word_tokens(content: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", content).casefold()
     words: list[str] = []
     current: list[str] = []
     for character in normalized:
@@ -399,8 +411,12 @@ def _memory_query_terms(query: str) -> list[str]:
             current.clear()
     if current:
         words.append("".join(current))
+    return words
+
+
+def _memory_query_terms(query: str) -> list[str]:
     return list(dict.fromkeys(
-        word for word in words if word not in _MEMORY_QUERY_STOP_WORDS
+        word for word in _word_tokens(query) if word not in _MEMORY_QUERY_STOP_WORDS
     ))
 
 

@@ -263,6 +263,8 @@ def test_tts_generation_timeout_cleans_partial_audio(monkeypatch, tmp_path):
 def test_voice_assistant_marks_retrieved_memory_context_sensitive():
     class FakeSTT:
         def listen_and_transcribe(self, **kwargs):
+            kwargs["on_activity"]("recording")
+            kwargs["on_activity"]("transcribing")
             return {"text": "How are you?", "language": "en", "language_probability": 0.95}
 
     class FakeTTS:
@@ -305,8 +307,10 @@ def test_voice_assistant_marks_retrieved_memory_context_sensitive():
     assistant.memory_retriever = SimpleNamespace(
         context_messages=lambda _question: [memory_message]
     )
-    assistant.start(max_turns=1)
+    activity = []
+    assistant.start(max_turns=1, on_activity=activity.append)
 
+    assert activity == ["speech_output", "listening", "recording", "transcribing", "thinking", "speech_output"]
     assert tts.language == "en"
     assert tts.spoken[-1] == "I am ready to help."
     assert ai.kwargs["sensitive"] is True
@@ -684,3 +688,33 @@ def test_voice_assistant_mute_control_is_reversible():
     assert assistant.is_muted
     assistant.set_muted(False)
     assert not assistant.is_muted
+
+
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_stt_reports_recording_only_while_input_stream_is_open(dynamic, monkeypatch):
+    from threading import Event
+
+    engine = SHUSTTEngine(sample_rate=1_000, settings=Settings.from_env({}))
+    stages = []
+
+    class FakeStream:
+        def __enter__(self):
+            stages.append("opened")
+            return self
+
+        def __exit__(self, *_args):
+            stages.append("closed")
+
+        def read(self, frames):
+            stages.append("read")
+            return np.ones((frames, 1), dtype=np.float32), False
+
+    def transcribe(audio, **_kwargs):
+        stages.append("whisper")
+        assert audio.size == 100
+        return {"text": "fixture", "language": "en"}
+
+    monkeypatch.setattr("app.voice.stt_engine.sd.InputStream", lambda **_kw: FakeStream())
+    monkeypatch.setattr(engine, "transcribe", transcribe)
+    engine.listen_and_transcribe(duration=0.1, dynamic=dynamic, stop_event=Event(), on_activity=stages.append)
+    assert stages == ["opened", "recording", "read", "closed", "transcribing", "whisper"]

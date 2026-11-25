@@ -6,11 +6,14 @@ import os
 import hashlib
 import ctypes
 import io
+import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from app.automation.paths import PathPolicy
 
@@ -21,6 +24,7 @@ _ALLOWED_APPS = {
     "explorer": "explorer.exe",
 }
 _CLICK_VERIFY_TIMEOUT_SECONDS = 2.0
+_MAX_FILE_COPY_BYTES = 64 * 1024 * 1024
 
 
 class WindowsAutomation:
@@ -341,6 +345,95 @@ class WindowsAutomation:
                 {"name": entry.name, "is_dir": resolved.is_dir(), "size": resolved.stat().st_size if resolved.is_file() else None}
             )
         return results
+
+    def preview_allowed_file(self, path: str | Path) -> dict[str, object]:
+        """Return copy review metadata without displaying the file's contents."""
+        source = self._approved_file_path(path, must_exist=True)
+        data = self._read_copy_source(source)
+        return {"path": str(source), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+    def validate_copy_arguments(
+        self, source: str, destination: str, expected_sha256: str,
+    ) -> dict[str, str]:
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
+            raise ValueError("Use the 64-character SHA-256 from the file preview")
+        source_path = self._approved_file_path(source, must_exist=True)
+        target = self._approved_file_path(destination, must_exist=False)
+        if target.exists():
+            raise FileExistsError("The destination already exists")
+        return {
+            "source": str(source_path),
+            "destination": str(target),
+            "expected_sha256": expected_sha256.lower(),
+        }
+
+    def copy_allowed_file(
+        self, source: str, destination: str, expected_sha256: str, *, approved: bool = False,
+    ) -> dict[str, object]:
+        """Publish a verified copy of the reviewed bytes at an unused name."""
+        if not approved:
+            raise PermissionError("Copying a file requires explicit approval")
+        arguments = self.validate_copy_arguments(source, destination, expected_sha256)
+        target = Path(arguments["destination"])
+        data = self._read_copy_source(Path(arguments["source"]))
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != arguments["expected_sha256"]:
+            raise ValueError("The source changed since preview. Review it again before copying.")
+
+        staged = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=target.parent, prefix=".shu-copy-", suffix=".part", delete=False,
+            ) as stream:
+                staged = Path(stream.name)
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            with staged.open("rb") as stream:
+                verified_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            if staged.stat().st_size != len(data) or verified_digest != digest:
+                raise IOError("Staged copy did not match the reviewed file")
+            # Publish the verified bytes as one entry. Linking cannot overwrite.
+            os.link(staged, target)
+            if not target.samefile(staged):
+                raise IOError("Published copy did not match the verified staging file")
+        finally:
+            if staged is not None:
+                staged.unlink(missing_ok=True)
+        return {**arguments, "size": len(data), "sha256": digest}
+
+    def _approved_file_path(self, value: str | Path, *, must_exist: bool) -> Path:
+        path = Path(value).expanduser().absolute()
+        root = next((root for root in self.paths.allowed_roots if path.is_relative_to(root)), None)
+        if root is None or path == root or ".." in path.parts:
+            raise PermissionError("Use a file path inside SHU's allowed directories")
+        entry = root
+        for component in path.relative_to(root).parts:
+            self.paths.validate_filename(component)
+            if PureWindowsPath(component).is_reserved() or component.endswith((".", " ")):
+                raise ValueError("Use a regular filename without reserved Windows names")
+            entry /= component
+            try:
+                metadata = entry.lstat()
+            except FileNotFoundError:
+                if must_exist or entry != path:
+                    raise
+            else:
+                if stat.S_ISLNK(metadata.st_mode) or (
+                    getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                ):
+                    raise PermissionError("File tools do not follow links or junctions")
+        return self.paths.resolve(path, must_exist=must_exist)
+
+    @staticmethod
+    def _read_copy_source(path: Path) -> bytes:
+        if not path.is_file():
+            raise ValueError("Select a regular file")
+        with path.open("rb") as stream:
+            data = stream.read(_MAX_FILE_COPY_BYTES + 1)
+        if len(data) > _MAX_FILE_COPY_BYTES:
+            raise ValueError("File preview and copying are limited to 64 MiB")
+        return data
 
     def _windows(self):
         if sys.platform != "win32":

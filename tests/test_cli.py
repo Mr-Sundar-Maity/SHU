@@ -186,6 +186,66 @@ def test_browser_session_parser_accepts_a_browser_channel():
     assert args.channel == "chrome"
 
 
+def test_files_cli_previews_and_copies_only_after_typed_yes(monkeypatch, tmp_path, capsys):
+    from app.cli import file_copy, file_preview
+
+    monkeypatch.setenv("SHU_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SHU_AUTOMATION_ENABLED", "true")
+    exports = tmp_path / "memory" / "exports"
+    exports.mkdir(parents=True)
+    source, target = exports / "note.txt", exports / "reviewed copy.txt"
+    contents = "Synthetic file body"
+    source.write_text(contents, encoding="utf-8")
+
+    assert file_preview(str(source)) == 0
+    output = capsys.readouterr().out
+    assert contents not in output
+    digest = json.loads(output)["sha256"]
+    args = build_parser().parse_args([
+        "files", "copy", str(source), str(target), "--sha256", digest, "--confirm",
+    ])
+    assert (args.command, args.file_action, args.sha256, args.confirm) == ("files", "copy", digest, True)
+
+    def unexpected_input(_prompt):
+        pytest.fail("An unconfirmed file copy must stop before asking for typed approval")
+
+    monkeypatch.setattr("builtins.input", unexpected_input)
+    assert file_copy(str(source), str(target), digest, confirmed=False) == 2
+    assert not target.exists()
+    assert "--confirm" in capsys.readouterr().out
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "NO")
+    assert file_copy(str(source), str(target), digest, confirmed=True) == 2
+    assert not target.exists()
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "YES")
+    assert file_copy(str(source), str(target), digest, confirmed=True) == 0
+    assert source.read_text(encoding="utf-8") == target.read_text(encoding="utf-8") == contents
+    assert contents not in capsys.readouterr().out
+
+
+def test_files_cli_rejects_a_source_changed_during_approval(monkeypatch, tmp_path, capsys):
+    from app.cli import file_copy, file_preview
+
+    monkeypatch.setenv("SHU_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SHU_AUTOMATION_ENABLED", "true")
+    exports = tmp_path / "memory" / "exports"
+    exports.mkdir(parents=True)
+    source, target = exports / "note.txt", exports / "destination.txt"
+    source.write_text("First version", encoding="utf-8")
+    assert file_preview(str(source)) == 0
+    digest = json.loads(capsys.readouterr().out)["sha256"]
+
+    def edit_then_approve(_prompt):
+        source.write_text("New version", encoding="utf-8")
+        return "YES"
+
+    monkeypatch.setattr("builtins.input", edit_then_approve)
+    assert file_copy(str(source), str(target), digest, confirmed=True) == 1
+    assert not target.exists()
+    assert "source changed since preview" in capsys.readouterr().out
+
+
 def test_voice_chat_reports_missing_wake_word_model_without_traceback(
     monkeypatch, tmp_path, capsys
 ):

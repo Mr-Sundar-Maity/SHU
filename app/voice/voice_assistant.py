@@ -108,6 +108,7 @@ class SHUVoiceAssistant:
         max_turns: int | None = None,
         language: str | None = None,
         dynamic_recording: bool = True,
+        on_activity: Callable[[str], None] | None = None,
     ) -> None:
         """Start a conversation; set max_turns for bounded runs and tests."""
         if max_turns is not None and max_turns < 1:
@@ -115,17 +116,27 @@ class SHUVoiceAssistant:
         if self._stop_event.is_set():
             return
 
+        def report(activity: str) -> None:
+            if on_activity is not None and not self._stop_event.is_set():
+                on_activity(activity)
+
+        def speak(text: str):
+            report("speech_output")
+            return self._speak(text)
+
         while self._mute_event.is_set() and not self._stop_event.wait(0.1):
             pass
         if self._stop_event.is_set():
             return
 
-        if self.settings.wakeword_model_path and not self._wait_for_wake_word():
-            return
+        if self.settings.wakeword_model_path:
+            report("wake_word")
+            if not self._wait_for_wake_word():
+                return
 
         language_code = self._normalize_language(language) or self.settings.default_language
         self.tts.set_language(language_code)
-        self._pending_audio = self._speak(
+        self._pending_audio = speak(
             GREETINGS.get(language_code, GREETINGS["en"])
         )
 
@@ -141,6 +152,7 @@ class SHUVoiceAssistant:
                     audio = self._pending_audio
                     self._pending_audio = None
                     print("\nSHU: Processing interrupted speech...")
+                    report("transcribing")
                     result = self.stt.transcribe(
                         audio,
                         language=language,
@@ -148,12 +160,14 @@ class SHUVoiceAssistant:
                     )
                 else:
                     duration = 15 if dynamic_recording else 5
+                    report("listening")
                     result = self.stt.listen_and_transcribe(
                         duration=duration,
                         language=language,
                         dynamic=dynamic_recording,
                         stop_event=self._stop_event,
                         mute_event=self._mute_event,
+                        **({"on_activity": report} if on_activity is not None else {}),
                     )
             except KeyboardInterrupt:
                 break
@@ -161,7 +175,7 @@ class SHUVoiceAssistant:
                 if self._stop_event.is_set():
                     break
                 print("SHU microphone error:", type(error).__name__)
-                self._pending_audio = self._speak(
+                self._pending_audio = speak(
                     REPEAT_PROMPTS.get(language_code, REPEAT_PROMPTS["en"])
                 )
                 break
@@ -172,7 +186,7 @@ class SHUVoiceAssistant:
             if self._mute_event.is_set():
                 continue
             if not question:
-                self._pending_audio = self._speak(
+                self._pending_audio = speak(
                     REPEAT_PROMPTS.get(language_code, REPEAT_PROMPTS["en"])
                 )
                 continue
@@ -187,7 +201,7 @@ class SHUVoiceAssistant:
             ):
                 language_code = detected_language
             else:
-                self._pending_audio = self._speak(
+                self._pending_audio = speak(
                     REPEAT_PROMPTS.get(language_code, REPEAT_PROMPTS["en"])
                 )
                 continue
@@ -195,10 +209,11 @@ class SHUVoiceAssistant:
             self.tts.set_language(language_code)
             print("\nYou:", question)
             if question.casefold().strip(" .!?।") in _STOP_PHRASES:
-                self._speak(GOODBYES.get(language_code, GOODBYES["en"]))
+                speak(GOODBYES.get(language_code, GOODBYES["en"]))
                 break
 
             print("\nSHU is thinking...")
+            report("thinking")
             context = [
                 {"role": turn.role, "content": turn.content}
                 for turn in self.history.recent()
@@ -230,7 +245,7 @@ class SHUVoiceAssistant:
             self.history.add("assistant", response)
             if self.on_turn:
                 self.on_turn(question, response)
-            self._pending_audio = self._speak(response)
+            self._pending_audio = speak(response)
             completed_turns += 1
 
     def _speak(self, text: str):

@@ -116,7 +116,9 @@ or voice session is active.
 The dashboard's **Ready** state is idle: it does not capture microphone audio or
 run wake-word inference in the background. Audio and the optional custom wake
 listener start only after you choose **Start listening**; stopping the session
-returns SHU to Ready.
+returns SHU to Ready. The **Voice activity** line distinguishes recording,
+transcription, AI processing and speech output. It also shows microphone mute
+and whether voice interruptions are enabled during speech output.
 
 List microphone devices and supported speech languages. The mic-check command
 lets you select an input and reports approximate level/clipping statistics
@@ -180,6 +182,19 @@ results, and missing languages without printing any path, reference or
 transcript in the report. WER uses normalized whitespace-delimited words. CER
 counts normalized Unicode characters without spaces. Keep the corpus fixed
 between comparison runs and have a native speaker review the results.
+
+Measure the local voice path with a consented mono 16 kHz WAV of up to 30
+seconds:
+
+```powershell
+python scripts\benchmark_voice.py C:\SHU_DATA\speech-evaluation\en-01.wav --consented --trials 3
+```
+
+The benchmark uses cached Whisper and an installed local Ollama model. It
+reports aggregate file-read, transcription, local response and silent speech
+handoff times. It does not capture a microphone, synthesize speech, play audio
+or print file paths, transcripts or replies. Use the same clip and model for
+comparisons. File-read timing is separate from live capture latency.
 
 Measure local Ollama performance with fixed, non-sensitive prompts. The report
 includes round-trip latency (median, p95, minimum and maximum), Ollama model
@@ -403,6 +418,22 @@ integration whose status is partial.
 - Windows ACLs for `.env` and the complete SHU data tree must pass the doctor
   check before storing credentials or relying on private data. The check also
   covers the configured Gmail OAuth client file when it exists.
+
+## Preview and copy a file
+
+Use existing regular files and an unused destination inside SHU's exports
+directory. The preview prints size and SHA-256 without displaying file contents.
+Replace `SHA256_FROM_PREVIEW` with the digest shown by the first command:
+
+```powershell
+python -m app.cli files preview C:\SHU_DATA\memory\exports\notes.txt
+python -m app.cli files copy C:\SHU_DATA\memory\exports\notes.txt C:\SHU_DATA\memory\exports\notes-copy.txt --sha256 SHA256_FROM_PREVIEW --confirm
+```
+
+Review both paths and type `YES` to copy. SHU copies up to 64 MiB and compares
+the source and staged bytes against the reviewed hash. The copy preserves the
+source and requires a destination filesystem that supports hard links, such as
+NTFS. Existing destination files are protected.
 
 ## Approved communications
 

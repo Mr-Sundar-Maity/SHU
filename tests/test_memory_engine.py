@@ -1,8 +1,11 @@
 import pytest
 import json
+import sqlite3
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 
 from database.database import Database
+from memory import memory_manager
 from memory.memory_extractor import MemoryExtractor
 from memory.memory_manager import MemoryManager
 from memory.memory_retriever import MemoryRetriever
@@ -60,6 +63,27 @@ def test_memory_retrieval_includes_only_relevant_approved_records(manager):
     assert relevant.content in context[0]["content"]
     assert "The favorite color is blue" not in context[0]["content"]
     assert "user_confirmed" in context[0]["content"]
+
+
+def test_context_excludes_within_word_matches(manager):
+    unrelated = manager.add_memory("My team meets every morning", approved=True)
+    relevant = manager.add_memory("I drink tea with breakfast", approved=True)
+
+    context = MemoryRetriever(manager).context_messages("What tea do I drink?")
+
+    assert len(context) == 1
+    assert relevant.content in context[0]["content"]
+    assert unrelated.content not in context[0]["content"]
+    assert MemoryRetriever(manager).context_messages("What tea?", limit=1) == context
+
+
+def test_memory_search_compares_normalized_words_on_both_sides(manager):
+    most_relevant = manager.add_memory("Use ＳＨＵ at Cafe\u0301", approved=True, confidence=0.5)
+    partial = manager.add_memory("The CAFÉ is in town", approved=True)
+    manager.add_memory("The cafeteria is nearby", approved=True)
+
+    assert manager.search("Cafe\u0301 with SHU") == [most_relevant, partial]
+    assert manager.search("shU", limit=1) == [most_relevant]
 
 
 def test_memory_search_handles_natural_questions_in_supported_languages(manager):
@@ -242,6 +266,129 @@ def test_memory_retention_requires_timezone_and_correction_keeps_retention(manag
     updated = manager.update_memory(record.memory_id, "Corrected note", approved=True)
     assert updated.content == "Corrected note"
     assert updated.retention_until == record.retention_until
+
+
+def test_memory_lookup_and_purge_honor_expiry_within_same_second(manager, monkeypatch):
+    record = manager.add_memory("Temporary garden note", approved=True)
+    instant = datetime(2026, 11, 26, 8, 0, 0, 500_000, tzinfo=timezone.utc)
+    deadline = instant - timedelta(milliseconds=250)
+    with manager.database.connect() as connection, connection:
+        connection.execute(
+            "UPDATE memories SET retention_until=? WHERE memory_id=?",
+            (deadline.isoformat(), record.memory_id),
+        )
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz)
+
+    monkeypatch.setattr(memory_manager, "datetime", FixedClock)
+    assert manager.search("garden") == []
+    assert manager.list_memories() == []
+    assert manager.purge_expired_memories(approved=True) == 1
+
+
+def test_memory_save_returns_record_if_it_expires_before_return(manager, monkeypatch):
+    instant = datetime.now(timezone.utc)
+    deadline = instant + timedelta(hours=1)
+    clock = [instant]
+    audit = manager._audit
+
+    def audit_then_advance(*args):
+        audit(*args)
+        clock[0] = deadline + timedelta(seconds=1)
+
+    monkeypatch.setattr(memory_manager, "_now", lambda: clock[0].isoformat())
+    monkeypatch.setattr(manager, "_audit", audit_then_advance)
+    saved = manager.add_memory("Temporary garden note", approved=True, retention_until=deadline)
+
+    assert saved.content == "Temporary garden note"
+    with pytest.raises(KeyError, match="Approved memory not found"):
+        manager.get_memory(saved.memory_id)
+
+
+def test_memory_purge_selects_expired_rows_under_write_lock(manager, monkeypatch):
+    record = manager.add_memory("Temporary garden note", approved=True)
+    with manager.database.connect() as connection, connection:
+        connection.execute(
+            "UPDATE memories SET retention_until=? WHERE memory_id=?",
+            ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(), record.memory_id),
+        )
+
+    connect = manager.database.connect
+    writes = []
+
+    def attempt_concurrent_write(statement):
+        if "SELECT memory_id FROM memories WHERE retention_until" not in statement:
+            return
+        with closing(sqlite3.connect(manager.database.path, timeout=0, isolation_level=None)) as competitor:
+            try:
+                competitor.execute("UPDATE memories SET retention_until=NULL WHERE memory_id=?", (record.memory_id,))
+            except sqlite3.OperationalError as error:
+                writes.append(str(error))
+            else:
+                writes.append("unexpected success")
+
+    @contextmanager
+    def trace_expired_selection():
+        with connect() as connection:
+            connection.set_trace_callback(attempt_concurrent_write)
+            yield connection
+
+    monkeypatch.setattr(manager.database, "connect", trace_expired_selection)
+    assert manager.purge_expired_memories(approved=True) == 1
+    assert writes == ["database is locked"]
+
+
+def test_memory_correction_locks_the_row_before_inheriting_retention(manager, monkeypatch):
+    record = manager.add_memory(
+        "Original garden note", approved=True,
+        retention_until=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    validate = memory_manager.validate_memory
+
+    def validate_while_locked(**kwargs):
+        # A competing connection cannot change the metadata used by this correction.
+        with closing(sqlite3.connect(manager.database.path, timeout=0)) as competitor:
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                competitor.execute(
+                    "UPDATE memories SET retention_until=NULL WHERE memory_id=?",
+                    (record.memory_id,),
+                )
+        validate(**kwargs)
+
+    monkeypatch.setattr(memory_manager, "validate_memory", validate_while_locked)
+    corrected = manager.update_memory(record.memory_id, "Corrected garden note", approved=True)
+    assert corrected.retention_until == record.retention_until
+    assert manager.get_memory(record.memory_id) == corrected
+
+
+def test_memory_correction_cannot_commit_after_expiry(manager, monkeypatch):
+    record = manager.add_memory("Original garden note", approved=True)
+    instant = datetime(2026, 11, 26, 8, 0, tzinfo=timezone.utc)
+    deadline = instant + timedelta(milliseconds=250)
+    with manager.database.connect() as connection, connection:
+        connection.execute(
+            "UPDATE memories SET retention_until=? WHERE memory_id=?",
+            (deadline.isoformat(), record.memory_id),
+        )
+
+    clock = [instant]
+    validate = memory_manager.validate_memory
+
+    def validate_after_delay(**kwargs):
+        validate(**kwargs)
+        clock[0] = instant + timedelta(milliseconds=500)
+
+    monkeypatch.setattr(memory_manager, "_now", lambda: clock[0].isoformat())
+    monkeypatch.setattr(memory_manager, "validate_memory", validate_after_delay)
+    with pytest.raises(KeyError, match="Approved memory not found"):
+        manager.update_memory(record.memory_id, "Expired garden correction", approved=True)
+
+    with manager.database.connect() as connection:
+        assert connection.execute("SELECT content FROM memories").fetchone()[0] == record.content
+        assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0] == 1
 
 
 def test_memory_review_flags_duplicates_and_possible_conflicts_without_writing(manager):
