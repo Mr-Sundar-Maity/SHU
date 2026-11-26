@@ -53,6 +53,16 @@ class ProviderNotConfigured(RuntimeError):
     pass
 
 
+class DeliveryOutcomeUnknown(RuntimeError):
+    """SHU could not establish whether the provider accepted the action."""
+
+
+def _confirmed_provider_id(value: object) -> str:
+    if not isinstance(value, str) or not value.strip() or not value.isprintable():
+        raise ValueError("The provider returned no valid confirmation ID")
+    return value
+
+
 class _HTMLText(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -208,6 +218,11 @@ class CommunicationService:
 
     def preview(self, draft_id: str) -> DraftPreview:
         row = self._get_draft(draft_id)
+        if row["status"] in {"sending", "saving_provider_draft", "unknown"}:
+            raise ValueError(
+                "The provider action is in progress or its outcome is unknown. "
+                "Inspect the provider before trying again."
+            )
         if row["status"] != "draft":
             raise ValueError("Only an unsent draft can be previewed for approval")
         attachment_records = self._verified_attachment_records(row)
@@ -286,19 +301,19 @@ class CommunicationService:
                     preview.subject,
                     preview.body,
                 )
+            external_id = _confirmed_provider_id(external_id)
         except ProviderNotConfigured:
             # No request was made, so keep the reviewed draft available after
             # the user configures the missing credential.
             self._set_delivery(draft_id, "draft", "provider_not_configured")
             raise
-        except (TimeoutError, httpx.TimeoutException) as error:
-            self._set_delivery(draft_id, "unknown", type(error).__name__)
-            raise RuntimeError(
-                "Delivery status is unknown after timeout; do not retry automatically"
-            ) from error
         except Exception as error:
-            self._set_delivery(draft_id, "failed", type(error).__name__)
-            raise
+            # A lost or malformed response does not establish that the provider
+            # rejected the approved request. Keep the draft blocked from retries.
+            self._set_delivery(draft_id, "unknown", type(error).__name__)
+            raise DeliveryOutcomeUnknown(
+                "Delivery status is unknown. Check the provider before sending another copy."
+            ) from None
 
         self._set_delivery(draft_id, "sent", external_id[:500])
         return external_id
@@ -353,16 +368,15 @@ class CommunicationService:
                     preview.subject,
                     preview.body,
                 )
-            if not isinstance(provider_id, str) or not provider_id:
-                raise RuntimeError("Email provider returned no draft ID")
+            provider_id = _confirmed_provider_id(provider_id)
         except ProviderNotConfigured:
             self._set_delivery(draft_id, "draft", "provider_not_configured")
             raise
         except Exception as error:
             self._set_delivery(draft_id, "unknown", type(error).__name__)
-            raise RuntimeError(
+            raise DeliveryOutcomeUnknown(
                 "Provider draft status is unknown; inspect the provider before retrying"
-            ) from error
+            ) from None
 
         self._set_delivery(draft_id, "provider_draft", provider_id[:500])
         return provider_id

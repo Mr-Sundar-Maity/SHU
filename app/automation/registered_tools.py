@@ -253,7 +253,7 @@ def register_safe_desktop_tools(
     automation: WindowsAutomation,
     office_service=None,
 ) -> None:
-    copy_keys = _only_keys({"source", "destination", "expected_sha256"})
+    transfer_keys = _only_keys({"source", "destination", "expected_sha256"})
     registry.register(
         ToolSpec(
             name="list_allowed_files",
@@ -282,10 +282,27 @@ def register_safe_desktop_tools(
             description="Copy an approved file to an unused path using its previewed SHA-256",
             risk=RiskLevel.MODIFICATION,
             handler=lambda **arguments: automation.copy_allowed_file(**arguments, approved=True),
-            validator=lambda args: automation.validate_copy_arguments(**copy_keys(args)),
+            validator=lambda args: automation.validate_copy_arguments(**transfer_keys(args)),
             verifier=lambda result, args: (
                 result["destination"] == args["destination"]
                 and result["sha256"] == args["expected_sha256"]
+            ),
+            estimate_seconds=5,
+            resources=("filesystem",),
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="move_allowed_file",
+            description="Move a reviewed file within one approved directory tree to an unused path",
+            risk=RiskLevel.MODIFICATION,
+            handler=lambda **arguments: automation.move_allowed_file(**arguments, approved=True),
+            validator=lambda args: automation.validate_move_arguments(**transfer_keys(args)),
+            verifier=lambda result, args: (
+                result["source"] == args["source"]
+                and result["destination"] == args["destination"]
+                and result["sha256"] == args["expected_sha256"]
+                and result["source_absent"]
             ),
             estimate_seconds=5,
             resources=("filesystem",),

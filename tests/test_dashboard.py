@@ -1176,3 +1176,53 @@ def test_dashboard_reminder_refuses_unknown_system_time_zone(tmp_path, monkeypat
     finally:
         window.close()
     assert app is not None
+
+
+def test_dashboard_backup_creates_verified_copy_in_worker_without_rotating(tmp_path, monkeypatch):
+    from threading import get_ident
+    from time import monotonic
+
+    from database.database import Database
+
+    app = QApplication.instance() or QApplication([])
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    backups = window.settings.memory_dir / "backups"
+    older = window.database.backup_to(backups / "shu-20260101T000000000000Z.db")
+    memory = window.memories.add_memory("Keep the test seed", approved=True)
+    main_thread = get_ident()
+    worker_threads = []
+    results = []
+    make_backup = window.database.create_timestamped_backup
+
+    def observe_worker(directory):
+        worker_threads.append(get_ident())
+        return make_backup(directory)
+
+    monkeypatch.setattr(window.database, "create_timestamped_backup", observe_worker)
+    monkeypatch.setattr(QMessageBox, "information", lambda _window, title, text: results.append((title, text)))
+    monkeypatch.setattr(QMessageBox, "warning", lambda _window, title, text: results.append((title, text)))
+    try:
+        assert window.backup_action.text() == "Create database backup"
+        window.backup_action.trigger()
+        assert not window.backup_action.isEnabled()
+        deadline = monotonic() + 6
+        while (not results or window._threads) and monotonic() < deadline:
+            app.processEvents()
+            QTest.qWait(10)
+
+        assert results and results[0][0] == "Verified database backup"
+        assert len(worker_threads) == 1 and worker_threads[0] != main_thread
+        assert window.backup_action.isEnabled()
+        created, = set(backups.glob("shu-*.db")) - {older}
+        assert str(created) in results[0][1]
+        assert older.is_file()
+        restored = Database(tmp_path / "restore-smoke.db")
+        restored.restore_from(created)
+        assert restored.integrity_check() == "ok"
+        with restored.connect() as connection:
+            value = connection.execute(
+                "SELECT content FROM memories WHERE memory_id=?", (memory.memory_id,),
+            ).fetchone()[0]
+        assert value == "Keep the test seed"
+    finally:
+        window.close()

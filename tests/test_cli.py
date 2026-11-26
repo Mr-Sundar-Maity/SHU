@@ -4,6 +4,7 @@ import pytest
 
 from app.cli import (
     build_parser,
+    communication_send,
     communication_save_provider_draft,
     configure_console_encoding,
     communication_draft,
@@ -15,6 +16,7 @@ from app.cli import (
     voice_chat,
 )
 from app.applications.contacts import ContactBook
+from app.applications.communications import DeliveryOutcomeUnknown
 from database.database import Database
 
 
@@ -244,6 +246,42 @@ def test_files_cli_rejects_a_source_changed_during_approval(monkeypatch, tmp_pat
     assert file_copy(str(source), str(target), digest, confirmed=True) == 1
     assert not target.exists()
     assert "source changed since preview" in capsys.readouterr().out
+
+
+def test_files_cli_moves_reviewed_bytes_and_can_reverse_the_move(monkeypatch, tmp_path, capsys):
+    import sys
+
+    from app.cli import file_move, file_preview
+
+    if sys.platform != "win32":
+        pytest.skip("Handle-based file moves require Windows")
+    pytest.importorskip("win32file")
+    monkeypatch.setenv("SHU_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SHU_AUTOMATION_ENABLED", "true")
+    exports = tmp_path / "memory" / "exports"
+    folder = exports / "organized"
+    folder.mkdir(parents=True)
+    source, target = exports / "note.txt", folder / "reviewed note.txt"
+    content = b"Synthetic file body for review"
+    source.write_bytes(content)
+    modification_time = source.stat().st_mtime_ns
+    assert file_preview(str(source)) == 0
+    digest = json.loads(capsys.readouterr().out)["sha256"]
+    args = build_parser().parse_args(["files", "move", str(source), str(target), "--sha256", digest, "--confirm"])
+    assert (args.command, args.file_action, args.sha256, args.confirm) == ("files", "move", digest, True)
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "NO")
+    assert file_move(str(source), str(target), digest, confirmed=True) == 2
+    assert source.read_bytes() == content and not target.exists()
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "YES")
+    assert file_move(str(source), str(target), digest, confirmed=True) == 0
+    assert not source.exists() and target.read_bytes() == content
+    assert target.stat().st_mtime_ns == modification_time
+    assert file_move(str(target), str(source), digest, confirmed=True) == 0
+    assert not target.exists() and source.read_bytes() == content
+    output = capsys.readouterr().out
+    assert "To undo" in output and content.decode() not in output
 
 
 def test_voice_chat_reports_missing_wake_word_model_without_traceback(
@@ -834,6 +872,18 @@ def test_email_reply_cli_confirms_the_reviewed_delivery_mode(
         assert success_message in output
     else:
         assert "Email action cancelled." in output
+
+
+def test_communication_send_warns_of_unknown_outcome_without_provider_details(monkeypatch, capsys):
+    def send(draft_id, *, confirmed, expected_digest):
+        assert (draft_id, confirmed, expected_digest) == ("test-draft", True, "reviewed-digest")
+        raise DeliveryOutcomeUnknown("synthetic private provider detail")
+
+    monkeypatch.setattr("app.cli._communication_service", lambda: SimpleNamespace(send=send))
+    assert communication_send("test-draft", "reviewed-digest", confirmed=True) == 1
+    output = capsys.readouterr().out
+    assert "Delivery status is unknown. Check the provider before sending another copy." in output
+    assert "synthetic private provider detail" not in output
 
 
 def test_provider_draft_cli_requires_matching_preview_and_typed_yes(monkeypatch):

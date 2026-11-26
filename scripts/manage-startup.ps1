@@ -19,6 +19,22 @@ $shortcutPath = Join-Path $StartupDirectory 'SHU Assistant.lnk'
 $expectedPython = [IO.Path]::GetFullPath($pythonwPath)
 $expectedArguments = '-m app.cli gui'
 
+if (-not $Remove) {
+    $pythonPath = Join-Path $projectRoot '.venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $expectedPython -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
+        throw "SHU's virtual environment is missing. Run scripts\setup.ps1 first."
+    }
+
+    Push-Location -LiteralPath $projectRoot
+    try {
+        & $pythonPath -c 'from app.interface.dashboard import SHUDashboard'
+        if ($LASTEXITCODE -ne 0) { throw 'Startup requires the desktop dashboard. Run scripts\setup.ps1 without -CoreOnly.' }
+    } finally {
+        Pop-Location
+    }
+}
+
 if (-not (Test-Path -LiteralPath $StartupDirectory -PathType Container)) {
     if ($Remove) {
         Write-Host 'No SHU startup shortcut is installed.'
@@ -45,9 +61,6 @@ try {
         exit 0
     }
 
-    if (-not (Test-Path -LiteralPath $expectedPython -PathType Leaf)) {
-        throw "SHU's virtual environment is missing. Run scripts\setup.ps1 first."
-    }
     if (Test-Path -LiteralPath $shortcutPath -PathType Leaf) {
         $existing = $shell.CreateShortcut($shortcutPath)
         if ([IO.Path]::GetFullPath($existing.TargetPath) -ine $expectedPython -or

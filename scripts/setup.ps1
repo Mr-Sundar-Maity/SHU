@@ -44,6 +44,11 @@ try {
     & $pythonPath -m pip check
     if ($LASTEXITCODE -ne 0) { throw 'Installed packages have dependency conflicts.' }
 
+    if (-not $CoreOnly) {
+        & $pythonPath -c 'from app.interface.dashboard import SHUDashboard'
+        if ($LASTEXITCODE -ne 0) { throw 'The dashboard could not load. Complete full setup before creating shortcuts.' }
+    }
+
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [System.Security.Principal.WindowsPrincipal]::new($identity)
     if ($principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -57,4 +62,8 @@ try {
 }
 
 Write-Host 'SHU setup finished.'
-Write-Host 'Start with: .\.venv\Scripts\python.exe -m app.cli gui'
+if ($CoreOnly) {
+    Write-Host 'Start with: .\.venv\Scripts\python.exe -m app.cli chat'
+} else {
+    Write-Host 'Start with: .\.venv\Scripts\python.exe -m app.cli gui'
+}

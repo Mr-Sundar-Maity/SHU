@@ -1,10 +1,12 @@
 import pytest
+import httpx
 from unittest.mock import Mock
 import base64
 from email import message_from_bytes
 
 from app.applications.communications import (
     CommunicationService,
+    DeliveryOutcomeUnknown,
     GmailApiProvider,
     MicrosoftGraphEmailProvider,
     ProviderNotConfigured,
@@ -93,18 +95,60 @@ def test_missing_token_keeps_reviewed_draft_retryable(db):
     assert service.send(draft_id, confirmed=True, expected_digest=preview.digest)
 
 
-def test_uncertain_timeout_cannot_be_resent(db):
-    provider = FakeProvider(error=TimeoutError("uncertain"))
+@pytest.mark.parametrize("error_type", [TimeoutError, httpx.ReadError, ValueError])
+def test_uncertain_provider_error_cannot_be_resent(db, error_type):
+    private_detail = "synthetic detail from provider"
+    provider = FakeProvider(error=error_type(private_detail))
     service = CommunicationService(db, email_provider=provider)
     draft_id = service.create_draft("email", "person@example.com", "Hello")
     preview = service.preview(draft_id)
 
-    with pytest.raises(RuntimeError, match="unknown"):
+    with pytest.raises(DeliveryOutcomeUnknown, match="unknown") as raised:
         service.send(draft_id, confirmed=True, expected_digest=preview.digest)
+    assert private_detail not in str(raised.value)
+    assert raised.value.__cause__ is None and raised.value.__suppress_context__
     assert service.status(draft_id) == "unknown"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Inspect the provider"):
         service.send(draft_id, confirmed=True, expected_digest=preview.digest)
     assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize("provider_id", [None, "", " \t", "unexpected\nline"])
+def test_whatsapp_without_valid_confirmation_id_stays_unknown(db, provider_id):
+    provider = FakeProvider()
+    provider.send = Mock(return_value=provider_id)
+    service = CommunicationService(db, whatsapp_provider=provider)
+    draft_id = service.create_draft("whatsapp", "+14155550123", "A reviewed message")
+    digest = service.preview(draft_id).digest
+
+    with pytest.raises(DeliveryOutcomeUnknown, match="Check the provider"):
+        service.send(draft_id, confirmed=True, expected_digest=digest)
+    with db.connect() as connection:
+        row = connection.execute(
+            "SELECT status,sent_at,external_id FROM communication_drafts WHERE draft_id=?",
+            (draft_id,),
+        ).fetchone()
+    assert tuple(row) == ("unknown", None, None)
+
+    with pytest.raises(ValueError, match="Inspect the provider"):
+        service.send(draft_id, confirmed=True, expected_digest=digest)
+    provider.send.assert_called_once()
+
+
+def test_uncertain_provider_draft_blocks_save_and_send(db):
+    provider = FakeProvider(error=httpx.RemoteProtocolError("synthetic lost response"))
+    service = CommunicationService(db, email_provider=provider)
+    draft_id = service.create_draft("email", "person@example.com", "Reviewed content")
+    digest = service.preview(draft_id).digest
+
+    with pytest.raises(DeliveryOutcomeUnknown, match="unknown"):
+        service.save_provider_draft(draft_id, confirmed=True, expected_digest=digest)
+    assert service.status(draft_id) == "unknown"
+    with pytest.raises(ValueError, match="Inspect the provider"):
+        service.save_provider_draft(draft_id, confirmed=True, expected_digest=digest)
+    with pytest.raises(ValueError, match="Inspect the provider"):
+        service.send(draft_id, confirmed=True, expected_digest=digest)
+    assert len(provider.draft_calls) == 1 and provider.calls == []
 
 
 def test_provider_email_draft_requires_exact_review_and_is_not_sent(db):

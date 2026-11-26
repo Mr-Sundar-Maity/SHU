@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import tempfile
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -185,6 +186,7 @@ class Database:
                 )
                 connection.commit()
                 connection.close()
+                connection = None
                 if not backup_path.exists():
                     self.backup_to(backup_path)
                 connection = sqlite3.connect(self.path, timeout=10)
@@ -196,11 +198,12 @@ class Database:
                 connection.commit()
                 current_version = target_version
         except Exception:
-            if connection.in_transaction:
+            if connection is not None and connection.in_transaction:
                 connection.rollback()
             raise
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     def integrity_check(self) -> str:
         with self.connect() as connection:
@@ -208,34 +211,40 @@ class Database:
         return str(result)
 
     def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
-        """Create a consistent SQLite backup; refuse overwrite by default."""
+        """Verify a consistent SQLite snapshot before publishing its final name."""
         target = Path(destination).expanduser()
         if target.resolve() == self.path.resolve():
             raise ValueError("Backup destination must differ from the live database")
         if target.exists() and not overwrite:
             raise FileExistsError(f"Backup already exists: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
-        temp_target = target.with_name(target.name + ".tmp")
-        if temp_target.exists():
-            raise FileExistsError(f"Temporary backup already exists: {temp_target}")
-
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+        )
+        temp_target = Path(temporary)
         try:
+            os.close(descriptor)
             with self.connect() as source:
-                backup = sqlite3.connect(temp_target)
-                try:
+                with closing(sqlite3.connect(temp_target)) as backup:
                     source.backup(backup)
                     backup.commit()
-                finally:
-                    backup.close()
-            if target.exists() and overwrite:
+                    if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                        raise ValueError("Snapshot failed its SQLite integrity check")
+            if overwrite:
                 os.replace(temp_target, target)
+            elif os.name == "nt":
+                # Windows rename refuses an existing destination, including a late collision.
+                os.rename(temp_target, target)
             else:
-                temp_target.rename(target)
-        except Exception:
-            if temp_target.exists():
-                temp_target.unlink()
-            raise
+                os.link(temp_target, target)
+        finally:
+            temp_target.unlink(missing_ok=True)
         return target
+
+    def create_timestamped_backup(self, directory: str | Path) -> Path:
+        """Create one named backup without rotating previous copies."""
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        return self.backup_to(Path(directory) / f"shu-{stamp}.db")
 
     @staticmethod
     def prune_timestamped_backups(directory: str | Path, *, keep: int = 10) -> list[Path]:

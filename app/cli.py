@@ -8,12 +8,12 @@ import hmac
 import json
 import shlex
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 from app.ai.ai_engine import SHUAIEngine
 from app.applications.communications import (
     CommunicationService,
+    DeliveryOutcomeUnknown,
     GmailApiProvider,
     MicrosoftGraphEmailProvider,
     ProviderNotConfigured,
@@ -28,7 +28,6 @@ from app.applications.contacts import (
     ContactNotFoundError,
     ContactRecord,
 )
-from app.applications.office import OfficeDocumentService
 from app.applications.browser import (
     BrowserReader,
     BrowserTabSession,
@@ -53,7 +52,6 @@ from memory.memory_manager import MemoryManager
 from memory.memory_retriever import MemoryRetriever
 from memory.procedural import ProceduralMemory
 from app.learning.learning_service import LearningService
-from app.notifications.reminders import ReminderService
 from memory.short_term import ShortTermMemory
 
 
@@ -96,10 +94,8 @@ def db_backup(*, keep: int = 10) -> int:
     if not database.path.exists():
         print("Database is not initialized. Run: python -m app.cli db init")
         return 2
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     backup_directory = settings.memory_dir / "backups"
-    destination = backup_directory / f"shu-{stamp}.db"
-    print("Backup created:", database.backup_to(destination))
+    print("Backup created:", database.create_timestamped_backup(backup_directory))
     removed = Database.prune_timestamped_backups(backup_directory, keep=keep)
     if removed:
         print(f"Removed {len(removed)} older SHU backup(s); keeping {keep}.")
@@ -118,6 +114,8 @@ def db_restore(source: str, *, confirmed: bool) -> int:
 
 
 def reminder_add(request: str, timezone_name: str) -> int:
+    from app.notifications.reminders import ReminderService
+
     database = _database()
     if not database.path.exists():
         print("Database is not initialized. Run: python -m app.cli db init")
@@ -140,6 +138,8 @@ def reminder_add(request: str, timezone_name: str) -> int:
 
 
 def reminder_list() -> int:
+    from app.notifications.reminders import ReminderService
+
     database = _database()
     if not database.path.exists():
         print("Database is not initialized. Run: python -m app.cli db init")
@@ -371,6 +371,9 @@ def communication_send(draft_id: str, digest: str, *, confirmed: bool) -> int:
             confirmed=confirmed,
             expected_digest=digest,
         )
+    except DeliveryOutcomeUnknown:
+        print("Delivery status is unknown. Check the provider before sending another copy.")
+        return 1
     except Exception as error:
         print("SHU could not send the draft:", type(error).__name__)
         return 1
@@ -691,7 +694,14 @@ def _task_services() -> tuple[TaskPlanner, TaskExecutor]:
         automation_enabled=settings.automation_enabled,
     )
     automation = WindowsAutomation([settings.memory_dir / "exports"])
-    office = OfficeDocumentService(settings.memory_dir / "exports")
+    try:
+        from app.applications.office import OfficeDocumentService
+    except ModuleNotFoundError as error:
+        if error.name not in {"docx", "openpyxl", "pptx"}:
+            raise
+        office = None
+    else:
+        office = OfficeDocumentService(settings.memory_dir / "exports")
     register_safe_desktop_tools(registry, automation, office)
     register_safe_browser_tools(registry, BrowserReader())
     planner = TaskPlanner(database, registry)
@@ -733,34 +743,50 @@ def file_preview(path: str) -> int:
 
 
 def file_copy(source: str, destination: str, sha256: str, *, confirmed: bool) -> int:
+    return _file_transfer("copy", source, destination, sha256, confirmed=confirmed)
+
+
+def file_move(source: str, destination: str, sha256: str, *, confirmed: bool) -> int:
+    return _file_transfer("move", source, destination, sha256, confirmed=confirmed)
+
+
+def _file_transfer(
+    operation: str, source: str, destination: str, sha256: str, *, confirmed: bool,
+) -> int:
     def confirm(_name, arguments, _risk):
-        print("Copy preview (the source is kept and existing files are protected):")
+        if operation == "move":
+            print("Move preview (the file will leave its old path):")
+        else:
+            print("Copy preview (the source is kept and existing files are protected):")
         print(json.dumps(arguments, ensure_ascii=False, indent=2))
         if not confirmed:
-            print("Run again with --confirm to approve this copy.")
+            print(f"Run again with --confirm to approve this {operation}.")
             return False
         try:
-            return input("Copy the reviewed bytes to this path? Type YES: ").strip() == "YES"
+            return input(f"{operation.title()} the reviewed bytes to this path? Type YES: ").strip() == "YES"
         except EOFError:
             return False
 
     try:
         _planner, executor = _task_services()
         result = executor.registry.execute(
-            "copy_allowed_file",
+            f"{operation}_allowed_file",
             {"source": source, "destination": destination, "expected_sha256": sha256},
             confirm=confirm,
         )
     except PolicyDenied:
-        print("File was not copied.")
+        print("File was not moved." if operation == "move" else "File was not copied.")
         return 2
     except (PermissionError, ValueError) as error:
-        print("Could not copy the file:", str(error))
+        print(f"Could not {operation} the file:", str(error))
         return 1
     except OSError as error:
-        print("Could not copy the file:", type(error).__name__)
+        detail = str(error) if operation == "move" else type(error).__name__
+        print(f"Could not {operation} the file:", detail)
         return 1
     print(json.dumps(result.value, ensure_ascii=False, indent=2))
+    if operation == "move":
+        print("To undo, preview the moved file and use files move with source and destination reversed.")
     return 0
 
 
@@ -1330,7 +1356,13 @@ def voice_chat(language: str | None, max_turns: int | None) -> int:
 
 
 def launch_gui() -> int:
-    from app.interface.dashboard import main as dashboard_main
+    try:
+        from app.interface.dashboard import main as dashboard_main
+    except ModuleNotFoundError as error:
+        if error.name not in {"PySide6", "docx", "openpyxl", "pptx", "apscheduler"}:
+            raise
+        print(r"The dashboard requires full setup. Run scripts\setup.ps1 without -CoreOnly.")
+        return 2
 
     return dashboard_main()
 
@@ -1428,15 +1460,16 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "logout":
             action_parser.add_argument("--confirm-delete", action="store_true")
 
-    files_parser = commands.add_parser("files", help="preview and copy files inside SHU exports")
+    files_parser = commands.add_parser("files", help="preview, copy and move files inside SHU exports")
     files_sub = files_parser.add_subparsers(dest="file_action", required=True)
     file_preview_parser = files_sub.add_parser("preview", help="show file size and SHA-256")
     file_preview_parser.add_argument("path")
-    file_copy_parser = files_sub.add_parser("copy", help="copy reviewed bytes to an unused path")
-    file_copy_parser.add_argument("source")
-    file_copy_parser.add_argument("destination")
-    file_copy_parser.add_argument("--sha256", required=True)
-    file_copy_parser.add_argument("--confirm", action="store_true")
+    for operation in ("copy", "move"):
+        transfer_parser = files_sub.add_parser(operation, help=f"{operation} reviewed bytes to an unused path")
+        transfer_parser.add_argument("source")
+        transfer_parser.add_argument("destination")
+        transfer_parser.add_argument("--sha256", required=True)
+        transfer_parser.add_argument("--confirm", action="store_true")
 
     task_parser = commands.add_parser(
         "tasks", help="queue, inspect, execute and safely recover tasks"
@@ -1606,7 +1639,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "files":
         if args.file_action == "preview":
             return file_preview(args.path)
-        return file_copy(args.source, args.destination, args.sha256, confirmed=args.confirm)
+        transfer = file_move if args.file_action == "move" else file_copy
+        return transfer(args.source, args.destination, args.sha256, confirmed=args.confirm)
     if args.command == "tasks":
         if args.task_action == "queue":
             return task_queue(args.limit)
@@ -1639,9 +1673,15 @@ def main(argv: list[str] | None = None) -> int:
             )
         return memory_purge_expired(confirmed=args.confirm)
     if args.command == "reminders":
-        if args.reminder_action == "list":
-            return reminder_list()
-        return reminder_add(" ".join(args.request), args.timezone)
+        try:
+            if args.reminder_action == "list":
+                return reminder_list()
+            return reminder_add(" ".join(args.request), args.timezone)
+        except ModuleNotFoundError as error:
+            if error.name != "apscheduler":
+                raise
+            print(r"Reminders require full setup. Run scripts\setup.ps1 without -CoreOnly.")
+            return 2
     if args.command == "mic-list":
         return mic_list()
     if args.command == "mic-check":

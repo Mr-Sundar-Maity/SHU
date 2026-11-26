@@ -222,6 +222,23 @@ class _ProviderDraftWorker(QObject):
             self.finished.emit("", type(error).__name__ + ": " + str(error))
 
 
+class _DatabaseBackupWorker(QObject):
+    finished = Signal(str, str)
+
+    def __init__(self, database: Database, directory: Path) -> None:
+        super().__init__()
+        self.database = database
+        self.directory = directory
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            backup = self.database.create_timestamped_backup(self.directory)
+            self.finished.emit(str(backup), "")
+        except Exception as error:
+            self.finished.emit("", type(error).__name__)
+
+
 class _PlanWorker(QObject):
     finished = Signal(str, str)
 
@@ -392,6 +409,9 @@ class SHUDashboard(QMainWindow):
         verify_action = QAction("Verify database", self)
         verify_action.triggered.connect(self._verify_database)
         file_menu.addAction(verify_action)
+        self.backup_action = QAction("Create database backup", self)
+        self.backup_action.triggered.connect(self._create_database_backup)
+        file_menu.addAction(self.backup_action)
 
     def _build_chat_tab(self) -> QWidget:
         tab = QWidget()
@@ -2321,6 +2341,27 @@ class SHUDashboard(QMainWindow):
     def _verify_database(self) -> None:
         result = self.database.integrity_check()
         QMessageBox.information(self, "Database check", result)
+
+    @Slot()
+    def _create_database_backup(self) -> None:
+        if self._closing or not self.backup_action.isEnabled():
+            return
+        self.backup_action.setEnabled(False)
+        self.status.setText("Creating a verified database backup...")
+        worker = _DatabaseBackupWorker(self.database, self.settings.memory_dir / "backups")
+        self._run_worker(worker, self._database_backup_finished)
+
+    @Slot(str, str)
+    def _database_backup_finished(self, path: str, error: str) -> None:
+        if self._closing:
+            return
+        self.backup_action.setEnabled(True)
+        if error:
+            self.status.setText("Database backup failed")
+            QMessageBox.warning(self, "Backup failed", f"Backup could not be saved ({error}). Check free disk space and retry.")
+            return
+        self.status.setText("Verified database backup saved")
+        QMessageBox.information(self, "Verified database backup", f"Saved to the SHU backups folder:\n{path}")
 
     @staticmethod
     def _local_timezone() -> str:

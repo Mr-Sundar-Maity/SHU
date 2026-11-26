@@ -33,8 +33,12 @@ powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 The installer runs setup, creates `.venv` if needed, installs the pinned core and v1
 dependencies, installs Playwright Chromium, initializes/upgrades the SQLite
 schema with a pre-migration backup, checks package consistency, and creates a
-current-user Start Menu shortcut. Use `-CoreOnly` only if you do not need the
-later v1 integrations. Startup launch remains opt-in:
+current-user Start Menu shortcut. Use `-CoreOnly` for terminal chat and core
+tools without the desktop integrations. Core-only setup creates no shortcuts
+and cannot be paired with `-EnableStartup`.
+
+Startup launch is opt-in. Running a full install without `-EnableStartup`
+leaves any existing SHU startup registration in place.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -EnableStartup
@@ -280,6 +284,9 @@ python -m app.cli db backup --keep 20
 
 `db backup` keeps the newest 10 timestamped SHU backups by default. Rotation
 only removes files matching SHU's generated timestamped backup naming pattern.
+In the dashboard, choose **SHU → Create database backup** to verify and save a
+snapshot in SHU's private backups folder while the window stays responsive.
+The dashboard keeps earlier backup copies.
 
 The current Windows user has the SHU dashboard logon shortcut enabled. Run
 these commands to recreate it or disable it (run setup first):
@@ -342,8 +349,9 @@ open, SHU asks you to review the latest state before it proceeds.
 Task feedback is stored in the local audit trail only after an explicit review
 and confirmation. Credential-related correction text is rejected.
 
-To restore a verified versioned SHU backup, SHU preserves the current database first
-and migrates an older backup to the current schema before replacement.
+Close the dashboard and other SHU sessions before restoring the live database.
+SHU preserves the current database first and migrates an older backup to the
+current schema before replacement.
 Review the file path and pass the explicit confirmation flag:
 
 ```powershell
@@ -419,7 +427,7 @@ integration whose status is partial.
   check before storing credentials or relying on private data. The check also
   covers the configured Gmail OAuth client file when it exists.
 
-## Preview and copy a file
+## Preview, copy and move a file
 
 Use existing regular files and an unused destination inside SHU's exports
 directory. The preview prints size and SHA-256 without displaying file contents.
@@ -434,6 +442,11 @@ Review both paths and type `YES` to copy. SHU copies up to 64 MiB and compares
 the source and staged bytes against the reviewed hash. The copy preserves the
 source and requires a destination filesystem that supports hard links, such as
 NTFS. Existing destination files are protected.
+
+On a full Windows install, `files move` uses the same digest and confirmation
+as copy. It renames the reviewed file to an unused path within the same
+approved tree. To undo it, preview the file at its new path and move it back
+with a new confirmation. It refuses to overwrite an occupied old path.
 
 ## Approved communications
 
@@ -458,6 +471,10 @@ python -m app.cli comms draft --channel whatsapp
 python -m app.cli comms preview DRAFT_ID
 python -m app.cli comms send DRAFT_ID --digest PREVIEW_DIGEST --confirm
 ```
+
+If SHU cannot confirm that the provider accepted a send or draft save, it
+records the outcome as `unknown`. Check the provider before creating another
+copy. The original draft stays blocked from replay.
 
 Set `SHU_EMAIL_PROVIDER=gmail` or `outlook` for email and configure the WhatsApp
 Business phone number ID and Graph API version in `.env`. Store the WhatsApp

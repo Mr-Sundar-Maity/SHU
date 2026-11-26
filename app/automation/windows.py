@@ -15,6 +15,7 @@ import tempfile
 import time
 from pathlib import Path, PureWindowsPath
 
+from app.automation.file_move import move_reviewed_file
 from app.automation.paths import PathPolicy
 
 
@@ -347,7 +348,7 @@ class WindowsAutomation:
         return results
 
     def preview_allowed_file(self, path: str | Path) -> dict[str, object]:
-        """Return copy review metadata without displaying the file's contents."""
+        """Return file review metadata without displaying the file's contents."""
         source = self._approved_file_path(path, must_exist=True)
         data = self._read_copy_source(source)
         return {"path": str(source), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
@@ -401,6 +402,32 @@ class WindowsAutomation:
             if staged is not None:
                 staged.unlink(missing_ok=True)
         return {**arguments, "size": len(data), "sha256": digest}
+
+    def validate_move_arguments(
+        self, source: str, destination: str, expected_sha256: str,
+    ) -> dict[str, str]:
+        arguments = self.validate_copy_arguments(source, destination, expected_sha256)
+        self._common_move_root(Path(arguments["source"]), Path(arguments["destination"]))
+        return arguments
+
+    def move_allowed_file(
+        self, source: str, destination: str, expected_sha256: str, *, approved: bool = False,
+    ) -> dict[str, object]:
+        """Rename a reviewed regular file and keep the former path available as an inverse."""
+        if not approved:
+            raise PermissionError("Moving a file requires explicit approval")
+        arguments = self.validate_copy_arguments(source, destination, expected_sha256)
+        source_path, target = Path(arguments["source"]), Path(arguments["destination"])
+        root = self._common_move_root(source_path, target)
+        digest = arguments["expected_sha256"]
+        size = move_reviewed_file(source_path, target, root, digest, max_bytes=_MAX_FILE_COPY_BYTES)
+        return {**arguments, "size": size, "sha256": digest, "source_absent": True}
+
+    def _common_move_root(self, source: Path, destination: Path) -> Path:
+        for root in self.paths.allowed_roots:
+            if source.is_relative_to(root) and destination.is_relative_to(root):
+                return root
+        raise PermissionError("Move files within the same approved directory tree")
 
     def _approved_file_path(self, value: str | Path, *, must_exist: bool) -> Path:
         path = Path(value).expanduser().absolute()

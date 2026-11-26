@@ -6,6 +6,20 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$setupScript = Join-Path $PSScriptRoot 'setup.ps1'
+if ($RemoveShortcuts -and ($CoreOnly -or $EnableStartup)) {
+    throw 'RemoveShortcuts cannot be combined with CoreOnly or EnableStartup.'
+}
+if ($CoreOnly) {
+    if ($EnableStartup) {
+        throw 'EnableStartup requires the desktop dashboard. Run installation without -CoreOnly.'
+    }
+    & $setupScript -CoreOnly
+    if ($LASTEXITCODE -ne 0) { throw 'SHU core setup failed.' }
+    Write-Host 'SHU core installation finished. Desktop shortcuts were not changed.'
+    return
+}
+
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $pythonwPath = [IO.Path]::GetFullPath(
     (Join-Path $projectRoot '.venv\Scripts\pythonw.exe')
@@ -94,9 +108,6 @@ try {
     $shell = New-Object -ComObject WScript.Shell
 
     if ($RemoveShortcuts) {
-        if ($CoreOnly -or $EnableStartup) {
-            throw 'RemoveShortcuts cannot be combined with CoreOnly or EnableStartup.'
-        }
         foreach ($shortcutPath in $shortcutTargets) {
             if ((Test-Path -LiteralPath $shortcutPath -PathType Leaf) -and
                 -not (Test-SHUShortcutTarget -ShortcutPath $shortcutPath)) {
@@ -110,12 +121,7 @@ try {
         return
     }
 
-    $setupScript = Join-Path $PSScriptRoot 'setup.ps1'
-    if ($CoreOnly) {
-        & $setupScript -CoreOnly
-    } else {
-        & $setupScript
-    }
+    & $setupScript
     if ($LASTEXITCODE -ne 0) {
         throw 'SHU setup failed; no shortcuts were installed.'
     }
@@ -129,7 +135,7 @@ try {
     }
     Write-Host 'SHU personal installation finished.'
     if (-not $EnableStartup) {
-        Write-Host 'Startup launch is off. Use -EnableStartup to add a current-user logon shortcut.'
+        Write-Host 'Startup registration was not changed. Use -EnableStartup to add a current-user logon shortcut.'
     }
 } finally {
     if ($null -ne $shell) {

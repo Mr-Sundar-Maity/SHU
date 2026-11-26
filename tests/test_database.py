@@ -42,6 +42,41 @@ def test_database_backup_is_consistent_and_refuses_overwrite(tmp_path):
         database.backup_to(backup)
 
 
+def test_database_backup_cannot_replace_a_destination_created_during_staging(tmp_path, monkeypatch):
+    from database import database as database_module
+
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    folder = tmp_path / "backups"
+    target = folder / "shu.db"
+    original_mkstemp = database_module.tempfile.mkstemp
+
+    def create_stage_and_destination(**kwargs):
+        result = original_mkstemp(**kwargs)
+        target.write_bytes(b"A different backup appeared")
+        return result
+
+    monkeypatch.setattr(database_module.tempfile, "mkstemp", create_stage_and_destination)
+    with pytest.raises(FileExistsError):
+        database.backup_to(target)
+
+    assert target.read_bytes() == b"A different backup appeared"
+    assert list(folder.iterdir()) == [target]
+    assert database.integrity_check() == "ok"
+
+
+def test_database_backup_leaves_no_published_copy_of_invalid_database(tmp_path):
+    path = tmp_path / "corrupt.db"
+    path.write_bytes(b"Not an SQLite database")
+    target = tmp_path / "backups" / "shu.db"
+
+    with pytest.raises(sqlite3.DatabaseError):
+        Database(path).backup_to(target)
+
+    assert list(target.parent.iterdir()) == []
+    assert path.read_bytes() == b"Not an SQLite database"
+
+
 def test_backup_rotation_keeps_newest_shu_files_and_preserves_unrelated_files(tmp_path):
     folder = tmp_path / "backups"
     folder.mkdir()

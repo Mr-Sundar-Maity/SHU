@@ -467,3 +467,24 @@ def test_screen_ocr_tool_requires_explicit_approval(monkeypatch, tmp_path):
     assert result.value["text"] == "private region"
     assert result.verified
     automation.read_screen_text.assert_called_once_with(**arguments)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Handle-based file moves require Windows")
+def test_file_move_refuses_a_destination_created_at_rename_time(monkeypatch, tmp_path):
+    win32file = pytest.importorskip("win32file")
+    automation = WindowsAutomation([tmp_path])
+    source, target = tmp_path / "review.txt", tmp_path / "new.txt"
+    source.write_bytes(b"Reviewed fixture")
+    revision = automation.preview_allowed_file(source)["sha256"]
+    rename = win32file.SetFileInformationByHandle
+
+    def rename_after_explicit_collision(*args):
+        target.write_bytes(b"Preserve this other file")
+        return rename(*args)
+
+    monkeypatch.setattr(win32file, "SetFileInformationByHandle", rename_after_explicit_collision)
+    with pytest.raises(FileExistsError):
+        automation.move_allowed_file(str(source), str(target), revision, approved=True)
+
+    assert source.read_bytes() == b"Reviewed fixture"
+    assert target.read_bytes() == b"Preserve this other file"
