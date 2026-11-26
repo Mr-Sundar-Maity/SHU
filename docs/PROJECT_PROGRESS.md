@@ -21,6 +21,9 @@ token and missing trained `Hey SHU` model.
 - Phase 18. Full `scripts\verify.ps1` passed 630 tests in 118.26 seconds,
   dependency and compilation checks, SQLite integrity at schema v5, and Doctor.
   Doctor still reports the missing WhatsApp token and trained wake model.
+- The hosted Windows check for source commit `98121b2` stopped before a
+  runner started. GitHub again reported an account billing lock.
+  [r9 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45729727797)
 - Phases 5 and 17. The dashboard's **Create database backup** action copies
   SQLite on a worker thread and reports the verified snapshot without rotating
   earlier backups. CLI and dashboard share timestamped naming. Each backup has

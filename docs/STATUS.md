@@ -30,9 +30,9 @@ For a dated resume checkpoint and concise phase-by-phase remaining work, see
 
 See [PRD_TRACEABILITY.md](PRD_TRACEABILITY.md) for requirement-level evidence and the exact remaining acceptance work.
 
-GitHub blocked the r8 Windows CI check before starting the job due to an
+GitHub blocked the r9 Windows CI check before starting the job due to an
 account billing lock. The hosted Windows setup and test results are pending.
-[r8 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45690641058)
+[r9 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45729727797)
 
 ## Machine checks
 
