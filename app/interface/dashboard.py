@@ -59,7 +59,7 @@ from app.config import (
 )
 from app.learning.learning_service import LearningService
 from app.logging_config import setup_logging
-from app.notifications.reminders import ReminderService, parse_natural_reminder
+from app.notifications.reminders import REMINDER_DELIVERY_UNCERTAIN, ReminderService, parse_natural_reminder
 from app.security.emergency_stop import EmergencyStop, WindowsEmergencyHotkey
 from app.security.privacy import is_sensitive_text
 from app.security.registry import ToolRegistry
@@ -546,9 +546,9 @@ class SHUDashboard(QMainWindow):
             "Show reminder notifications without speaking them"
         )
         layout.addWidget(self.quiet_mode)
-        self.reminder_table = QTableWidget(0, 3)
+        self.reminder_table = QTableWidget(0, 4)
         self.reminder_table.setAccessibleName("Pending reminders")
-        self.reminder_table.setHorizontalHeaderLabels(["Due (saved time zone)", "Reminder", "ID"])
+        self.reminder_table.setHorizontalHeaderLabels(["Due (saved time zone)", "Reminder", "ID", "Status"])
         self.reminder_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.reminder_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.reminder_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -2290,6 +2290,8 @@ class SHUDashboard(QMainWindow):
             self.reminder_table.setItem(index, 0, QTableWidgetItem(due_label))
             self.reminder_table.setItem(index, 1, QTableWidgetItem(reminder["text"]))
             self.reminder_table.setItem(index, 2, QTableWidgetItem(reminder["reminder_id"]))
+            state = "Delivery uncertain" if reminder["result"] == REMINDER_DELIVERY_UNCERTAIN else "Pending"
+            self.reminder_table.setItem(index, 3, QTableWidgetItem(state))
 
     def _selected_reminder(self) -> str | None:
         row = self.reminder_table.currentRow()

@@ -284,6 +284,22 @@ def test_files_cli_moves_reviewed_bytes_and_can_reverse_the_move(monkeypatch, tm
     assert "To undo" in output and content.decode() not in output
 
 
+def test_restore_cli_reports_bad_backup_without_touching_live_db(monkeypatch, tmp_path, capsys):
+    from app import cli
+    from database.database import Database
+
+    live = Database(tmp_path / "memory" / "shu.db")
+    live.initialize()
+    original = live.path.read_bytes()
+    invalid = tmp_path / "not-sqlite.db"
+    invalid.write_bytes(b"Invalid local backup")
+    monkeypatch.setattr(cli, "_database", lambda: live)
+
+    assert cli.db_restore(str(invalid), confirmed=True) == 1
+    assert capsys.readouterr().out.strip() == "Restore was not applied: Restore source is not a valid versioned SHU backup"
+    assert live.path.read_bytes() == original
+
+
 def test_voice_chat_reports_missing_wake_word_model_without_traceback(
     monkeypatch, tmp_path, capsys
 ):

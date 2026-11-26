@@ -155,7 +155,7 @@ def test_database_restore_preserves_current_data_and_restores_backup(tmp_path):
         ).fetchone()[0] == "light"
 
 
-def test_database_backup_restores_into_a_fresh_destination(tmp_path):
+def test_database_backup_restores_into_a_fresh_destination(tmp_path, monkeypatch):
     source = Database(tmp_path / "source" / "shu.db")
     source.initialize()
     with source.connect() as connection:
@@ -166,9 +166,19 @@ def test_database_backup_restores_into_a_fresh_destination(tmp_path):
             )
     backup = source.backup_to(tmp_path / "backup" / "shu-known-good.db")
     fresh_destination = Database(tmp_path / "clean-profile" / "memory" / "shu.db")
+    opens = []
+    connect = sqlite3.connect
+
+    def track_restore_source(path, *args, **kwargs):
+        if path == backup.as_uri() + "?mode=ro":
+            opens.append(path)
+        return connect(path, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", track_restore_source)
 
     restored_path, preserved_live_copy = fresh_destination.restore_from(backup)
 
+    assert len(opens) == 1
     assert restored_path == fresh_destination.path
     assert preserved_live_copy is None
     assert fresh_destination.integrity_check() == "ok"
@@ -190,6 +200,56 @@ def test_database_restore_rejects_unversioned_sqlite_file(tmp_path):
         live.restore_from(invalid)
 
 
+def test_restore_rejects_missing_shu_columns_before_preserving_or_replacing_live(tmp_path):
+    live = Database(tmp_path / "memory" / "shu.db")
+    live.initialize()
+    original = live.path.read_bytes()
+    incomplete = live.backup_to(tmp_path / "incomplete.db")
+    with closing(sqlite3.connect(incomplete)) as connection, connection:
+        connection.execute("ALTER TABLE reminders RENAME COLUMN text TO not_the_shu_column")
+
+    with pytest.raises(ValueError, match="valid versioned SHU backup"):
+        live.restore_from(incomplete)
+
+    assert live.path.read_bytes() == original
+    assert not (live.path.parent / "backups").exists()
+    assert not live.path.with_name("shu.db.restore.tmp").exists()
+
+
+@pytest.mark.parametrize("suffix", ("-wal", "-shm", "-journal"))
+def test_restore_leaves_a_destination_with_a_sqlite_journal_untouched(tmp_path, suffix):
+    live = Database(tmp_path / "memory" / "shu.db")
+    live.initialize()
+    original = live.path.read_bytes()
+    backup = live.backup_to(tmp_path / "good.db")
+    sidecar = live.path.with_name(live.path.name + suffix)
+    sidecar.write_bytes(b"Existing journal fixture")
+
+    with pytest.raises(ValueError, match="Close other SHU sessions"):
+        live.restore_from(backup)
+
+    assert live.path.read_bytes() == original
+    assert sidecar.read_bytes() == b"Existing journal fixture"
+    assert not (live.path.parent / "backups").exists()
+    assert not live.path.with_name("shu.db.restore.tmp").exists()
+
+
+def test_restore_refuses_to_overwrite_an_existing_staging_file(tmp_path):
+    live = Database(tmp_path / "memory" / "shu.db")
+    live.initialize()
+    original = live.path.read_bytes()
+    backup = live.backup_to(tmp_path / "good.db")
+    occupied = live.path.with_name("shu.db.restore.tmp")
+    occupied.write_bytes(b"Another restore or an interrupted attempt")
+
+    with pytest.raises(FileExistsError, match="Inspect it before retrying"):
+        live.restore_from(backup)
+
+    assert occupied.read_bytes() == b"Another restore or an interrupted attempt"
+    assert live.path.read_bytes() == original
+    assert not (live.path.parent / "backups").exists()
+
+
 def test_restore_migrates_a_v2_backup_before_replacing_live_database(tmp_path):
     live = Database(tmp_path / "memory" / "shu.db")
     live.initialize()
@@ -207,6 +267,9 @@ def test_restore_migrates_a_v2_backup_before_replacing_live_database(tmp_path):
 
     live.restore_from(older)
 
+    assert not list(live.path.parent.glob("*.restore.tmp*"))
+    with closing(sqlite3.connect(older)) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
     with live.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         columns = {

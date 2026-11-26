@@ -7,6 +7,7 @@ import getpass
 import hmac
 import json
 import shlex
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -107,7 +108,14 @@ def db_restore(source: str, *, confirmed: bool) -> int:
         print("Restore changes the live database. Re-run with --confirm-restore after reviewing the source.")
         return 2
     database = _database()
-    restored, preserved = database.restore_from(source)
+    try:
+        restored, preserved = database.restore_from(source)
+    except (FileNotFoundError, FileExistsError, ValueError) as error:
+        print("Restore was not applied:", error)
+        return 1
+    except (OSError, sqlite3.Error) as error:
+        print(f"Restore was not applied ({type(error).__name__}). Close other SHU sessions and check the backup.")
+        return 1
     print("Restored database:", restored)
     print("Pre-restore backup:", preserved if preserved else "not needed")
     return 0
@@ -138,7 +146,7 @@ def reminder_add(request: str, timezone_name: str) -> int:
 
 
 def reminder_list() -> int:
-    from app.notifications.reminders import ReminderService
+    from app.notifications.reminders import REMINDER_DELIVERY_UNCERTAIN, ReminderService
 
     database = _database()
     if not database.path.exists():
@@ -149,7 +157,8 @@ def reminder_list() -> int:
         print("No pending reminders.")
         return 0
     for row in rows:
-        print(f"{row['due_at']} | {row['text']} | {row['reminder_id']}")
+        state = " | Delivery uncertain" if row["result"] == REMINDER_DELIVERY_UNCERTAIN else ""
+        print(f"{row['due_at']} | {row['text']} | {row['reminder_id']}{state}")
     return 0
 
 

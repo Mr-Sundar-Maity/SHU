@@ -1226,3 +1226,25 @@ def test_dashboard_backup_creates_verified_copy_in_worker_without_rotating(tmp_p
         assert value == "Keep the test seed"
     finally:
         window.close()
+
+
+def test_dashboard_displays_interrupted_reminder_delivery_and_snooze_clears_it(tmp_path):
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+
+    def interrupt_notifier(*_args):
+        raise SystemExit("Local notifier interruption fixture")
+
+    try:
+        window.reminders.notifier = interrupt_notifier
+        reminder_id = window.reminders.create("Check the meeting notes", datetime.now(timezone.utc) + timedelta(hours=1))
+        due = window.reminders.list_pending()[0]["due_at"]
+        with pytest.raises(SystemExit):
+            window.reminders._deliver(reminder_id, due)
+
+        window._refresh_reminders()
+        assert window.reminder_table.item(0, 3).text() == "Delivery uncertain"
+        window.reminder_table.selectRow(0)
+        window._snooze_reminder()
+        assert window.reminder_table.item(0, 3).text() == "Pending"
+    finally:
+        window.close()

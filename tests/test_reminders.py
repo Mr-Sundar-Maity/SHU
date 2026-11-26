@@ -221,6 +221,124 @@ def test_stale_delivery_job_skips_a_snoozed_reminder(tmp_path):
     assert [row["reminder_id"] for row in service.list_pending()] == [reminder_id]
 
 
+@pytest.mark.parametrize("recurrence", [None, "daily"])
+def test_two_sessions_claim_one_delivery_of_the_same_occurrence(tmp_path, recurrence):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    path = tmp_path / "shu.db"
+    database = Database(path)
+    database.initialize()
+    entered = Event()
+    release = Event()
+    calls = []
+
+    def first_notice(*_args):
+        calls.append("first")
+        entered.set()
+        assert release.wait(5)
+        return "displayed"
+
+    def second_notice(*_args):
+        calls.append("second")
+        return "displayed"
+
+    first = ReminderService(database, notifier=first_notice)
+    second = ReminderService(Database(path), notifier=second_notice)
+    due = datetime.now(timezone.utc).replace(microsecond=0)
+    reminder_id = first.create("private fixture", due - timedelta(days=1), recurrence=recurrence)
+    scheduled_due = first.list_pending()[0]["due_at"]
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        delivery = workers.submit(first._deliver, reminder_id, scheduled_due, scheduled_occurrence=due)
+        try:
+            assert entered.wait(5)
+            duplicate = workers.submit(second._deliver, reminder_id, scheduled_due, scheduled_occurrence=due)
+            duplicate.result(timeout=5)
+            assert calls == ["first"]
+        finally:
+            release.set()
+        delivery.result(timeout=5)
+
+    with database.connect() as connection:
+        claims = connection.execute(
+            "SELECT * FROM audit_logs WHERE tool='reminder_delivery'"
+        ).fetchall()
+    assert len(claims) == 1
+    assert claims[0]["result"] == "delivered"
+    assert "private fixture" not in str(tuple(claims[0]))
+
+    if recurrence:
+        second._deliver(reminder_id, scheduled_due, scheduled_occurrence=due + timedelta(days=1))
+        assert calls == ["first", "second"]
+
+
+def test_interrupted_claim_is_not_replayed_on_restart_but_can_be_snoozed(tmp_path):
+    path = tmp_path / "shu.db"
+    database = Database(path)
+    database.initialize()
+    attempts = []
+
+    def interrupted_notice(*_args):
+        attempts.append("interrupted")
+        raise SystemExit("Simulate a process exiting before recording delivery")
+
+    first = ReminderService(database, notifier=interrupted_notice)
+    due = datetime.now(timezone.utc) - timedelta(minutes=2)
+    reminder_id = first.create("fixture", due)
+    scheduled_due = first.list_pending()[0]["due_at"]
+    with pytest.raises(SystemExit):
+        first._deliver(reminder_id, scheduled_due)
+
+    # Reopening SQLite sees the claim even though the notifier never returned.
+    second = ReminderService(Database(path), notifier=lambda *_args: attempts.append("retried"))
+    try:
+        assert second.start() == []
+        assert second.scheduler.get_job(reminder_id) is None
+        row, = second.list_pending()
+        assert row["reminder_id"] == reminder_id
+        assert row["result"] == "outcome_unknown"
+        second._deliver(reminder_id, scheduled_due, scheduled_occurrence=due + timedelta(minutes=1))
+        assert attempts == ["interrupted"]
+    finally:
+        second.shutdown()
+
+    second.snooze(reminder_id)
+    new_due = second.list_pending()[0]["due_at"]
+    assert new_due != scheduled_due
+    second._deliver(reminder_id, new_due)
+    assert attempts == ["interrupted", "retried"]
+    with database.connect() as connection:
+        assert sorted(row[0] for row in connection.execute(
+            "SELECT result FROM audit_logs WHERE tool='reminder_delivery'"
+        )) == ["delivered", "outcome_unknown"]
+
+
+def test_scheduler_forwards_exact_recurring_run_time_to_claim(tmp_path):
+    from threading import Event
+
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    delivered = Event()
+    service = ReminderService(database, notifier=lambda *_args: delivered.set())
+    anchor = datetime.now(timezone.utc) + timedelta(days=2)
+    reminder_id = service.create("future recurring fixture", anchor, recurrence="weekly")
+    service.scheduler.start(paused=True)
+    try:
+        service._schedule(reminder_id)
+        scheduled_time = datetime.now(timezone.utc) - timedelta(milliseconds=10)
+        service.scheduler.modify_job(reminder_id, next_run_time=scheduled_time)
+        service.scheduler.resume()
+        assert delivered.wait(5)
+    finally:
+        service.shutdown()
+
+    with database.connect() as connection:
+        claim = connection.execute(
+            "SELECT log_id FROM audit_logs WHERE tool='reminder_delivery'"
+        ).fetchone()
+    assert claim["log_id"].endswith(scheduled_time.isoformat())
+
+
 def test_quiet_mode_suppresses_speech_signal(tmp_path):
     import threading
 

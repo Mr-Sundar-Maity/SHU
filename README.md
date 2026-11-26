@@ -124,6 +124,28 @@ returns SHU to Ready. The **Voice activity** line distinguishes recording,
 transcription, AI processing and speech output. It also shows microphone mute
 and whether voice interruptions are enabled during speech output.
 
+To evaluate a trained local wake-word model offline, prepare consented mono
+16 kHz PCM-16 WAV recordings. Put a JSON manifest next to the recordings with
+relative file names. Use `label: "positive"` and an `activation_window_seconds`
+range for a spoken wake phrase, or `label: "negative"` for recordings that
+should never wake SHU. For example:
+
+```json
+[
+  {"audio": "wake.wav", "label": "positive", "activation_window_seconds": [0.8, 1.8]},
+  {"audio": "room.wav", "label": "negative"}
+]
+```
+
+```powershell
+python scripts\evaluate_wake_word.py C:\SHU_DATA\models\hey-shu.onnx C:\SHU_DATA\wake-evaluation\manifest.json --consented
+```
+
+The evaluator reports aggregate hits, misses, false activations per hour and
+processing time using the live threshold and debounce rules. It requires the
+model and runtime assets to be installed locally. Live microphone checks and
+representative audio measurements are separate acceptance steps.
+
 List microphone devices and supported speech languages. The mic-check command
 lets you select an input and reports approximate level/clipping statistics
 after typed confirmation; it keeps no recording or transcript. You can specify
@@ -256,6 +278,9 @@ time and uses the earlier occurrence of a repeated time. Dashboard reminders
 use the Windows time zone, and the pending list displays each reminder in its
 saved time zone with the UTC offset. Turning on Quiet mode before a queued
 notification reaches the dashboard suppresses its speech.
+Multiple SHU sessions share one delivery attempt for each reminder occurrence.
+If SHU is interrupted during a one-time attempt, its status shows
+**Delivery uncertain**. Use Snooze to schedule a new occurrence if needed.
 
 When adding or correcting approved memories, SHU rejects known credential
 formats and common password assignments in its six supported languages.
@@ -350,8 +375,10 @@ Task feedback is stored in the local audit trail only after an explicit review
 and confirmation. Credential-related correction text is rejected.
 
 Close the dashboard and other SHU sessions before restoring the live database.
-SHU preserves the current database first and migrates an older backup to the
-current schema before replacement.
+SHU checks the staged snapshot's schema and integrity, migrates an older
+snapshot if needed, and retains a pre-restore backup before replacing the live
+file. An existing SQLite journal or interrupted restore staging file stops the
+operation for inspection.
 Review the file path and pass the explicit confirmation flag:
 
 ```powershell

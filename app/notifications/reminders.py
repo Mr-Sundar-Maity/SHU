@@ -11,6 +11,8 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.job import Job
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -19,6 +21,7 @@ from database.database import Database
 
 
 Notifier = Callable[[str, str, bool], str | None]
+REMINDER_DELIVERY_UNCERTAIN = "outcome_unknown"
 
 _WEEKDAYS = {
     "monday": 0,
@@ -636,6 +639,36 @@ class _CalendarReminderTrigger(BaseTrigger):
             candidate_date += self.interval
 
 
+class _DeliveryInvocation:
+    """Pass the actual run time to the callback without modifying its job."""
+
+    def __init__(self, job: Job, occurrence: datetime) -> None:
+        self.job = job
+        self.args = tuple(job.args)
+        self.kwargs = {**job.kwargs, "scheduled_occurrence": occurrence}
+
+    def __getattr__(self, name: str):
+        return getattr(self.job, name)
+
+    def __str__(self) -> str:
+        return str(self.job)
+
+
+class _ReminderExecutor(ThreadPoolExecutor):
+    def _do_submit_job(self, job: Job, run_times: list[datetime]) -> None:
+        # APScheduler supplies exactly one time for a coalesced job.
+        # Its executor still handles misfires and accounts for the running job.
+        (occurrence,) = run_times
+        super()._do_submit_job(_DeliveryInvocation(job, occurrence), run_times)
+
+
+def _delivery_claim_id(reminder_id: str, occurrence: datetime) -> str:
+    if occurrence.tzinfo is None:
+        occurrence = occurrence.replace(tzinfo=timezone.utc)
+    timestamp = occurrence.astimezone(timezone.utc).isoformat()
+    return f"reminder-delivery:{reminder_id}:{timestamp}"
+
+
 class ReminderService:
     """Schedule reminders while SHU is running and record each delivery."""
 
@@ -649,7 +682,9 @@ class ReminderService:
         self.database = database
         self.notifier = notifier or self._console_notice
         self.quiet_mode = quiet_mode or (lambda: False)
-        self.scheduler = BackgroundScheduler(timezone="UTC")
+        self.scheduler = BackgroundScheduler(
+            timezone="UTC", executors={"default": _ReminderExecutor()}
+        )
 
     @staticmethod
     def _console_notice(reminder_id: str, text: str, allow_speech: bool) -> str:
@@ -721,25 +756,33 @@ class ReminderService:
     def start(self) -> list[sqlite3.Row]:
         if not self.scheduler.running:
             self.scheduler.start()
+        now = datetime.now(timezone.utc)
+        overdue = []
         with self.database.connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM reminders WHERE status='pending' ORDER BY due_at"
             ).fetchall()
-        now = datetime.now(timezone.utc)
-        overdue = []
-        for row in rows:
-            due = datetime.fromisoformat(row["due_at"])
-            if due.tzinfo is None:
-                due = due.replace(tzinfo=timezone.utc)
-            if row["recurrence"] in {"daily", "weekly"}:
-                # The stored due_at is the first occurrence. After a restart
-                # it will usually be in the past; the calendar trigger still knows
-                # how to schedule the next future occurrence from its time.
-                self._schedule(row["reminder_id"])
-            elif due <= now:
-                overdue.append(row)
-            else:
-                self._schedule(row["reminder_id"])
+            for row in rows:
+                due = datetime.fromisoformat(row["due_at"])
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                if row["recurrence"] not in {"daily", "weekly"} and due <= now:
+                    claim = connection.execute(
+                        "SELECT 1 FROM audit_logs WHERE log_id=?",
+                        (_delivery_claim_id(row["reminder_id"], due),),
+                    ).fetchone()
+                    # A prior process may have notified before it could save
+                    # the result. Keep the reminder available for snooze/cancel.
+                    if claim is None:
+                        overdue.append(row)
+                else:
+                    # Recurring rows retain their original anchor. The trigger
+                    # computes the next future occurrence after a restart.
+                    try:
+                        self._schedule(row["reminder_id"])
+                    except KeyError:
+                        # Another session can cancel or finish it after this read.
+                        continue
         return overdue
 
     def confirm_overdue(self, reminder_id: str, *, still_relevant: bool) -> None:
@@ -801,8 +844,10 @@ class ReminderService:
         with self.database.connect() as connection:
             with connection:
                 cursor = connection.execute(
-                    "UPDATE reminders SET status=? WHERE reminder_id=?",
-                    (status, reminder_id),
+                    """UPDATE reminders SET status=?,
+                    result=CASE WHEN result=? THEN NULL ELSE result END
+                    WHERE reminder_id=?""",
+                    (status, REMINDER_DELIVERY_UNCERTAIN, reminder_id),
                 )
                 if cursor.rowcount == 0:
                     raise KeyError("Reminder not found")
@@ -839,28 +884,63 @@ class ReminderService:
             args=[reminder_id, row["due_at"]],
             id=reminder_id,
             replace_existing=True,
+            coalesce=True,
             misfire_grace_time=24 * 60 * 60,
         )
 
-    def _deliver(self, reminder_id: str, scheduled_due_at: str) -> None:
+    def _deliver(
+        self, reminder_id: str, scheduled_due_at: str, *,
+        scheduled_occurrence: datetime | None = None,
+    ) -> None:
         with self.database.connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM reminders WHERE reminder_id=? AND status='pending' AND due_at=?",
-                (reminder_id, scheduled_due_at),
-            ).fetchone()
-        if row is None:
-            return
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT * FROM reminders WHERE reminder_id=? AND status='pending' AND due_at=?",
+                    (reminder_id, scheduled_due_at),
+                ).fetchone()
+                if row is None:
+                    return
+                if row["recurrence"]:
+                    if scheduled_occurrence is None:
+                        raise ValueError("A recurring reminder requires its scheduled occurrence")
+                    occurrence = scheduled_occurrence
+                else:
+                    # Explicit overdue recovery may move the job's execution
+                    # time but retains the original one-shot occurrence.
+                    occurrence = datetime.fromisoformat(scheduled_due_at)
+                claim_id = _delivery_claim_id(reminder_id, occurrence)
+                claim = connection.execute(
+                    """INSERT INTO audit_logs
+                    (log_id,actor,tool,action_summary,risk,approval,result,timestamp)
+                    VALUES (?,'scheduler','reminder_delivery','Reminder delivery attempt',
+                            'LOW_IMPACT','not_required',?,?)
+                    ON CONFLICT(log_id) DO NOTHING""",
+                    (claim_id, REMINDER_DELIVERY_UNCERTAIN, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+                )
+                if claim.rowcount != 1:
+                    return
+                if not row["recurrence"]:
+                    connection.execute(
+                        "UPDATE reminders SET result=? WHERE reminder_id=?",
+                        (REMINDER_DELIVERY_UNCERTAIN, reminder_id),
+                    )
 
-        quiet = bool(self.quiet_mode())
+        error_code = None
         try:
+            quiet = bool(self.quiet_mode())
             result = self.notifier(reminder_id, row["text"], not quiet) or "delivered"
             status = "pending" if row["recurrence"] else "delivered"
         except Exception as error:
-            result = type(error).__name__
+            error_code = result = type(error).__name__
             status = "failed" if not row["recurrence"] else "pending"
 
         with self.database.connect() as connection:
             with connection:
+                connection.execute(
+                    "UPDATE audit_logs SET result=?,error_code=? WHERE log_id=?",
+                    ("failed" if error_code else "delivered", error_code, claim_id),
+                )
                 connection.execute(
                     """UPDATE reminders SET status=?,last_notified_at=?,result=?
                     WHERE reminder_id=? AND status='pending' AND due_at=?""",

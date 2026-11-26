@@ -142,6 +142,37 @@ _MIGRATIONS = {
 }
 
 
+def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
+    for statement in _MIGRATIONS[version]:
+        connection.execute(statement)
+    connection.execute(f"PRAGMA user_version = {version}")
+
+
+def _validate_restore_snapshot(connection: sqlite3.Connection) -> int:
+    """Check the staged database against the SHU schema for its declared version."""
+    error = "Restore source is not a valid versioned SHU backup"
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if not 1 <= version <= SCHEMA_VERSION:
+        raise ValueError(error)
+    if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+        raise ValueError(error)
+    if connection.execute("SELECT 1 FROM sqlite_schema WHERE type IN ('trigger', 'view') LIMIT 1").fetchone():
+        raise ValueError(error)
+    with closing(sqlite3.connect(":memory:")) as expected:
+        expected.executescript(_SCHEMA)
+        for migration in range(2, version + 1):
+            _apply_migration(expected, migration)
+        column_query = "SELECT name FROM pragma_table_info(?)"
+        for (table,) in expected.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"):
+            required = {row[0] for row in expected.execute(column_query, (table,))}
+            actual = {row[0] for row in connection.execute(column_query, (table,))}
+            if not required <= actual:
+                raise ValueError(error)
+    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise ValueError(error)
+    return version
+
+
 class Database:
     """Small SQLite wrapper; initialization is explicit and idempotent."""
 
@@ -192,9 +223,7 @@ class Database:
                 connection = sqlite3.connect(self.path, timeout=10)
                 connection.execute("PRAGMA foreign_keys = ON")
                 connection.execute("BEGIN IMMEDIATE")
-                for statement in _MIGRATIONS[target_version]:
-                    connection.execute(statement)
-                connection.execute(f"PRAGMA user_version = {target_version}")
+                _apply_migration(connection, target_version)
                 connection.commit()
                 current_version = target_version
         except Exception:
@@ -274,55 +303,48 @@ class Database:
         if backup == self.path.resolve():
             raise ValueError("Restore source must differ from the live database")
 
-        source_uri = backup.as_uri() + "?mode=ro"
-        with closing(sqlite3.connect(source_uri, uri=True)) as source_connection:
-            integrity = source_connection.execute("PRAGMA integrity_check").fetchone()[0]
-            version = source_connection.execute("PRAGMA user_version").fetchone()[0]
-            tables = {
-                row[0]
-                for row in source_connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            }
-        required_tables = {"memories", "messages", "tasks", "reminders", "audit_logs"}
-        has_comms = version < 2 or "communication_drafts" in tables
-        if (
-            integrity != "ok"
-            or version < 1
-            or version > SCHEMA_VERSION
-            or not required_tables <= tables
-            or not has_comms
-        ):
-            raise ValueError("Restore source is not a valid versioned SHU backup")
-
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        current_backup: Path | None = None
-        if self.path.exists():
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            current_backup = self.path.parent / "backups" / f"{self.path.stem}-before-restore-{stamp}.db"
-            self.backup_to(current_backup)
-
         temporary = self.path.with_name(self.path.name + ".restore.tmp")
-        if temporary.exists():
-            raise FileExistsError(f"Temporary restore file already exists: {temporary}")
         try:
-            with closing(sqlite3.connect(source_uri, uri=True)) as source_connection:
-                with closing(sqlite3.connect(temporary)) as target_connection:
-                    source_connection.backup(target_connection)
-                    target_connection.commit()
-            with closing(sqlite3.connect(temporary)) as verification:
-                restored_integrity = verification.execute("PRAGMA integrity_check").fetchone()[0]
-                restored_version = verification.execute("PRAGMA user_version").fetchone()[0]
-            if restored_version < SCHEMA_VERSION:
-                Database(temporary).initialize()
-                with closing(sqlite3.connect(temporary)) as verification:
-                    restored_integrity = verification.execute("PRAGMA integrity_check").fetchone()[0]
-                    restored_version = verification.execute("PRAGMA user_version").fetchone()[0]
-            if restored_integrity != "ok" or restored_version != SCHEMA_VERSION:
-                raise ValueError("Restored copy failed integrity or version verification")
+            with temporary.open("xb"):
+                pass
+        except FileExistsError as error:
+            raise FileExistsError(
+                "Another restore is active or left a staging file. Inspect it before retrying."
+            ) from error
+
+        current_backup: Path | None = None
+        try:
+            source_uri = backup.as_uri() + "?mode=ro"
+            try:
+                with closing(sqlite3.connect(source_uri, uri=True)) as source_connection:
+                    with closing(sqlite3.connect(temporary)) as snapshot:
+                        source_connection.backup(snapshot)
+                        snapshot.commit()
+                with closing(sqlite3.connect(temporary)) as snapshot:
+                    version = _validate_restore_snapshot(snapshot)
+                    if version < SCHEMA_VERSION:
+                        snapshot.execute("PRAGMA foreign_keys = ON")
+                        with snapshot:
+                            snapshot.execute("BEGIN IMMEDIATE")
+                            for migration in range(version + 1, SCHEMA_VERSION + 1):
+                                _apply_migration(snapshot, migration)
+                        _validate_restore_snapshot(snapshot)
+            except sqlite3.DatabaseError as error:
+                raise ValueError("Restore source is not a valid versioned SHU backup") from error
+
+            self._check_restore_destination()
+            if self.path.exists():
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                current_backup = self.path.parent / "backups" / f"{self.path.stem}-before-restore-{stamp}.db"
+                self.backup_to(current_backup)
+            self._check_restore_destination()
             os.replace(temporary, self.path)
         except Exception:
-            if temporary.exists():
-                temporary.unlink()
+            temporary.unlink(missing_ok=True)
             raise
         return self.path, current_backup
+
+    def _check_restore_destination(self) -> None:
+        if any(self.path.with_name(self.path.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+            raise ValueError("The live database has an SQLite journal. Close other SHU sessions and verify it before restoring.")
