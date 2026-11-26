@@ -16,7 +16,7 @@ integrity (`ok`) and schema version 5 also passed. Doctor passed its core
 environment checks. Its remaining warnings are the missing WhatsApp access
 token and missing trained `Hey SHU` model.
 
-## GitHub checkpoint on 2026-11-26 (r10b)
+## GitHub checkpoint on 2026-11-26 (r10c)
 
 - Phase 18. Final `scripts\verify.ps1` passed 650 tests in 45.62 seconds,
   dependency and compile checks, SQLite integrity at schema v5 and Doctor.
@@ -51,12 +51,13 @@ token and missing trained `Hey SHU` model.
   and closed offscreen. This used the existing Windows account in scratch
   paths. Elevated ACL behavior, shortcuts and a different profile remain to
   be checked for this setup.
-- Phase 19. The local r10b ZIP contains 116 allowlisted files and 314,457 bytes.
-  SHA-256 is `da5697d58a5f927822eea6194d58a1b05921f553536082fc18559e4e534c87d7`.
-  Verified member bytes match the checkout. An isolated extraction created a
-  new schema v5 database without project `.env` or a credential directory.
-  Its full suite passed all 650 tests in 48.76 seconds using the fresh full
-  Windows setup's venv, which also passed `pip check` for the extraction.
+- Phase 19. The local r10c ZIP contains 116 allowlisted files and 314,609 bytes.
+  SHA-256 is `503a483e87123f96a9a811b7fd9c069c340e3adf141990ab39b2b52fe086789c`.
+  Member bytes match the merged checkout. A checksum-verified comparison with
+  r10b found only the README title from incoming GitHub commit `ab34d7f`.
+  The r10b extraction passed all 650 tests in 48.76 seconds using the fresh
+  full Windows setup's venv. Its `pip check` passed. The merged r10c extraction
+  initialized and verified a separate schema v5 database with no credentials.
 
 ## Earlier GitHub checkpoint on 2026-11-26 (r9)
 
@@ -437,7 +438,7 @@ token and missing trained `Hey SHU` model.
 | 16. Email | Gmail OAuth, search/read and confirmed draft/send paths implemented. CLI reply and forward approvals bind the recipient, subject and delivery mode. Changes are rejected before a provider write. Outlook reply tests check one reviewed To address and empty Cc/Bcc on the returned draft before send. Dashboard send and provider-draft dialogs display literal text and attachment details and decline stale approval. Provider-draft saves and direct sends now require a usable provider reference and block replay of uncertain actions. | Broader Gmail reply/forward/attachment/send acceptance; Outlook registration/consent remains unverified. The verified draft routing still requires a live Outlook acceptance check. |
 | 17. Dashboard | Voice, task, memory, reminder, communication, Cloud AI and automation controls implemented, including six response-style modes and a post-session voice request planner handoff with exact-step preview and approval; dashboard text size is adjustable from 8–24 points. The conversation transcript displays literal text and line breaks. Voice stop and queued Quiet mode have offscreen regression coverage. Offscreen shutdown tests confirm responsive closing with two active Qt workers and no new work. Offscreen tests verify time zone persistence and exact, plain-text communication confirmations. A labelled Voice activity line distinguishes capture, processing and speech output and preserves the mute indicator. The SHU menu can create a verified SQLite backup on a worker thread without rotating earlier backups. The reminder list surfaces uncertain delivery separately from pending and permits explicit rescheduling. | Target-desktop keyboard/screen-reader acceptance and full interactive/provider acceptance remain. |
 | 18. Hardening | Latest full verification: 650 tests in 45.62 seconds; dependency, compile, database and Doctor checks pass; local Qwen benchmark/soak reports Ollama timings, model footprint, SHU data-volume free space, CPU/RAM and latency; a FIFO gate prevents Ollama and Whisper CPU overlap | Target-device RAM headroom, full hardware voice path, wake-word acceptance, complete threat-model run and physical power-loss test remain. |
-| 19. Release | Setup/startup/recovery tooling, verified 2026-11-26 r10b personal source ZIP and extracted-copy schema-5 database CLI smoke exist. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. A full disposable setup from the prior release used fresh PyPI packages and launched an isolated managed browser and offscreen dashboard on this host. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain. |
+| 19. Release | Setup/startup/recovery tooling, verified 2026-11-26 r10c personal source ZIP and extracted-copy schema-5 database CLI smoke exist. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. A full disposable setup from the prior release used fresh PyPI packages and launched an isolated managed browser and offscreen dashboard on this host. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain. |
 
 ## External and hardware prerequisites
 
@@ -458,7 +459,7 @@ token and missing trained `Hey SHU` model.
 
 ## Resume point
 
-Resume from the r10b software checkpoint and compare the working tree with
+Resume from the r10c software checkpoint and compare the working tree with
 `origin/main`. Continue with the acceptance items in the phase rows and publish
 verified source and progress updates to the same branch. Rerun Windows CI after
 GitHub restores runner access. Live checks still
