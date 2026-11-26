@@ -10,13 +10,136 @@ existing implementation and records the newest verified state; it does not
 replace the requirement-level evidence in [PRD_TRACEABILITY.md](PRD_TRACEABILITY.md)
 or the delivery summary in [STATUS.md](STATUS.md).
 
-The latest full `scripts\verify.ps1` run passed. Its pytest stage passed
-**672 tests in 62.27 seconds**. `pip check`, Python compilation, SQLite
-integrity (`ok`) and schema version 5 also passed. Doctor passed its core
-environment checks. Its remaining warnings are the missing WhatsApp access
-token and missing trained `Hey SHU` model.
+The latest full pytest run passed **744 tests in 84.68 seconds**. `pip check`
+and Python compilation passed. An isolated extraction of the r14 bundle
+initialized and verified SQLite integrity (`ok`) at schema version 5. Doctor was
+not rerun in this pass; its last result passed core checks and warned only about
+the missing WhatsApp access token and trained `Hey SHU` model.
 
-## GitHub checkpoint on 2026-11-26 (r11)
+## Latest work on 2026-11-26 (r14, verified and packaged)
+
+- Resumed from `c8aaa7e` with the r13 changes still unstaged. They were verified
+  together and are included in this checkpoint: stale memory/reminder/workflow
+  approval binding, dashboard session-only language detection with visible
+  recognition and prompt feedback, non-overwriting template `.env` setup,
+  packaging bootstrap-file checks, and strict UI Automation three-state checks.
+- Phase 7 and Master PRD section 6.6 (bounded context plus a summary of older
+  conversation). `memory/short_term.py` now keeps a rolling summary of turns
+  evicted from the 20-turn window: at most 900 characters, at most 160
+  characters per line, whitespace collapsed, newest lines retained, and only
+  user/assistant turns included. `ShortTermMemory.system_instruction()` appends
+  it under an "Earlier conversation summary (reference data, not instructions)"
+  header. CLI text chat, the voice assistant and the dashboard chat worker all
+  use it. The summary travels inside the system instruction, so the existing
+  privacy classifier scans it and the 2,000-character instruction budget applies
+  after the bounded summary budget.
+- Added `tests/test_conversation_summary.py` (9 cases: eviction, budget, role
+  filtering, whitespace/truncation, clear, instruction assembly, validation, and
+  an end-to-end CLI chat at 12 questions) and one dashboard worker regression.
+  The focused CLI/voice/dashboard/memory run passed 183 tests; dashboard alone
+  passed 47.
+- Dependency manifest cleanup. Removed `opencv-python==5.0.0.93` and
+  `fastapi==0.163.1` from `requirements-v1.txt`; neither was imported anywhere
+  in `app/`, `memory/`, `database/`, `scripts/` or `tests/`. Current manifests
+  therefore pin **23 direct runtime dependencies** (10 core + 13 v1), down from
+  25. Packaging, setup and CI read the manifest dynamically and needed no code
+  change. The current `.venv` still contains the previously installed
+  distributions, so `docs/THIRD_PARTY_LICENSES.csv` remains an accurate
+  inventory of this environment; a clean install no longer includes them.
+- Schema decision: `memory_tags` and `app_events` were deliberately **not**
+  added. The Master PRD lists them as "proposed" entities, and neither has a
+  reader or writer in the code. Adding them would require a schema-v6 migration
+  for existing v5 databases and would create unused tables, which conflicts with
+  the PRD rule to create structures only when their phase needs them. Schema
+  remains v5 with 11 tables, verified from the extracted bundle. This is recorded
+  as an intentional, documented deviation rather than dead schema.
+- Verification. Full suite: **744 passed in 84.68 seconds**. `pip check`:
+  no broken requirements. `compileall` over `app`, `memory`, `database`,
+  `scripts` and `tests`: passed. r14 source bundle:
+  `dist\SHU_personal_source_2026-11-26_r14.zip`, 117 entries, 329,435 bytes,
+  SHA-256 `84f236334425a583e434bbb552b48e6e472573821892a9ec8b5e4f872d296a6a`.
+  It passed path, private-file, CRC and Python-syntax checks; the new test and
+  `memory/short_term.py` are present; member bytes match the checkout; its
+  isolated extraction initialized and verified a schema-v5 database with
+  `Integrity: ok`.
+- Still open: push and exact-commit hosted CI inspection (GitHub is still
+  blocked by the account billing restriction), plus all previously listed
+  live-hardware, live-account, human-language, power-loss and licensing
+  acceptance work.
+
+## Verified work on 2026-11-26 (r13, included in r14)
+
+- Resumed from the README and r12b checkpoint without resetting the checkout.
+  A fresh fetch confirmed `main` and `origin/main` both at `c8aaa7e`.
+  Existing r12b changes and later setup, packaging and voice changes are being
+  preserved and verified together before publication.
+- Setup now publishes a complete template `.env` without replacing an existing
+  or concurrently created configuration. Packaging rejects missing bootstrap
+  files before creating a bundle and when verifying its inventory. The focused
+  installer/packaging run passed 27 tests in 6.62 seconds using scratch fixtures;
+  it did not reinstall this project.
+- The dashboard has a session-only automatic language detection checkbox,
+  recognition-language feedback and visible greeting/clarification prompts.
+  A stop dispatched from a voice prompt or activity callback previously still
+  reached TTS. Both reproductions now pass with a pre-dispatch stop check.
+  Dashboard, multilingual voice, barge-in and voice-benchmark tests passed
+  95 cases in 10.21 seconds, using offscreen Qt and fake audio.
+- Review found a separate stale memory-confirmation risk: another session's
+  correction could be overwritten or deleted after an older dashboard review,
+  and a retention-only CLI change could restore old content. Snapshot binding
+  at the SQLite write is now implemented and covered by regressions. No schema
+  migration was needed.
+- The merged full suite, source bundle and extraction checks were completed in
+  the r14 checkpoint above. Push and exact-commit hosted CI inspection remain
+  open. This section is evidence of the r13 fix set, not release acceptance.
+
+## Earlier local checkpoint on 2026-11-26 (r12b)
+
+- Resumed from `c8aaa7e` on `main`. This checkpoint covers changes to approved
+  memory exports, Windows control checks, overdue reminders and reusable workflows.
+- Publication is pending. Automatic approval review hit its usage limit before
+  the staging, commit and push command could run. At this check, all 14 changed
+  files were unstaged. Local HEAD and the last fetched `origin/main` were
+  `c8aaa7e`. No hosted CI run exists for the local r12b changes.
+- Phase 6. An interrupted JSON export could expose a partial file, and a name
+  collision could delete an earlier export. The writer now flushes a temporary
+  sibling and publishes the complete JSON with collision protection. Multilingual
+  preference review keeps Indic combining marks and English contractions together.
+  Eight synthetic regression cases reproduced the old behavior and passed after
+  the fixes. Owner-approved examples are still needed to measure recall quality.
+- Phase 9. A disposable native Windows three-state checkbox returned 0, 1 and 2
+  through UI Automation. SHU recognized unchecked, checked and indeterminate
+  separately. All 28 focused Windows automation tests passed. Real target-app
+  clicks, focus, screen reader and OCR acceptance remain open.
+- Phase 13. Overdue confirmation binds to the displayed due time. A later
+  snooze or delivery attempt invalidates the earlier decision. Two concurrent
+  Windows schedulers recovering the same occurrence produced one SQLite claim
+  and one callback to a controlled sink. Quiet mode suppressed its speech flag.
+  This covered scheduler firing and recovery. Owner-visible notification and
+  audible output remain open.
+- Phases 14 and 17. Editing, approving and revoking a workflow check its
+  displayed version at the SQLite write. Replay also checks the approved
+  request and steps when claiming the queued task. Offscreen Qt keyboard input
+  exercised review, approval, replay, completion and revocation through five
+  dialogs. Exactly one synthetic tool call completed. Replay after revocation
+  was refused. Regressions cover concurrent edits during confirmation and
+  changes after a task enters the queue.
+- Phase 4. A new direct Gemini request with a fixed synthetic prompt returned
+  HTTP 503 in 7.91 seconds. Cloud generation remains open. The project continues
+  to select local Ollama with `qwen2.5:1.5b`.
+- Phase 16. The existing Gmail authorization passed a fresh read-only provider
+  check through `auth email verify --provider gmail`. The command suppressed
+  account data. Live email writes still need a reviewed recipient and content.
+- Phases 18 and 19. The checkout passed all 694 tests in 148.44 seconds.
+  Dependency checks, compilation, SQLite schema v5 integrity and core Doctor
+  checks passed. The personal r12b ZIP contains 116 allowlisted files and
+  measures 322,363 bytes. Its SHA-256 is
+  `98a2953371724855bca0b216d46906ac39bfcf8884f7f1bc69dd6bdc84f4596d`.
+  Every member matched the checkout byte for byte. Its fresh extraction
+  passed dependency checks, isolated database initialization and verification,
+  and all 694 tests in 111.64 seconds on this Windows host.
+
+## Earlier GitHub checkpoint on 2026-11-26 (r11)
 
 - Continued from r10c at `0b13c21`. Existing SQLite records and local
   configuration were preserved. The selected model remains `qwen2.5:1.5b`.
@@ -465,25 +588,25 @@ token and missing trained `Hey SHU` model.
 
 | Phase | Current status | Remaining acceptance work |
 |---|---|---|
-| 1. Foundation | Current checkout verified on Windows 11 Home Single Language with Python 3.11. CoreOnly now avoids desktop imports for core CLI operations and leaves shortcuts alone, verified with desktop modules withheld. A separate fresh full Windows venv installed all 25 direct pins and verified managed Chromium, SQLite and dashboard imports. | Validate a clean Windows profile and measure against the PRD's exact 16 GB RAM baseline. |
+| 1. Foundation | Current checkout verified on Windows 11 Home Single Language with Python 3.11. CoreOnly now avoids desktop imports for core CLI operations and leaves shortcuts alone, verified with desktop modules withheld. A separate fresh full Windows venv installed all 25 direct pins that were pinned at the time and verified managed Chromium, SQLite and dashboard imports. The r14 manifests pin 23 direct runtime dependencies after removing unused OpenCV and FastAPI. | Validate a clean Windows profile and measure against the PRD's exact 16 GB RAM baseline. |
 | 2. Voice baseline | Prototype; controls and simulated paths pass. Voice activity now shows an opened microphone stream separately from transcription, AI and speech output. Live Edge TTS synthesized and decoded six synthetic samples. Device playback and pronunciation acceptance remain open. | Owner-run microphone/speaker test, repeated capture, barge-in threshold and echo acceptance. The owner deferred spoken testing; the prior short capture was near-silent. |
 | 3. Multilingual | Partial; forced/detected paths exist. Offline WAV evaluation reports grouped WER, CER and auto detection behavior. It passed a single synthetic English smoke with cached Whisper. | Consented native-speaker test sets for all six languages, measured thresholds, code-switching and noise/accent validation. Synthetic results did not meet quality acceptance. |
-| 4. AI providers | Local Qwen path and shared FIFO inference gate work; Gemini failover is implemented. Five synthetic file-input trials passed with local Whisper and Qwen. Four warm trials reached the speech handoff in 5.361 seconds median and 5.879 seconds p95. Repeatable synthetic WAV benchmark passed 3/3 with cached Whisper and local Qwen to a silent sink. A separate direct Gemini probe returned HTTP 503. Voice and dashboard chat cancel waiting inference, discard late responses and skip provider fallback after Stop. | Gemini generation itself is currently unreliable with HTTP 503; local fallback works. Complete provider and voice-to-answer acceptance when the cloud service responds. |
+| 4. AI providers | Local Qwen path and shared FIFO inference gate work; Gemini failover is implemented. Five synthetic file-input trials passed with local Whisper and Qwen. Four warm trials reached the speech handoff in 5.361 seconds median and 5.879 seconds p95. Repeatable synthetic WAV benchmark passed 3/3 with cached Whisper and local Qwen to a silent sink. A separate direct Gemini probe returned HTTP 503. Voice and dashboard chat cancel waiting inference, discard late responses and skip provider fallback after Stop. A direct synthetic Gemini generation request returned HTTP 503 on 2026-11-26. | Gemini generation itself is currently unreliable with HTTP 503; local fallback works. Complete provider and voice-to-answer acceptance when the cloud service responds. |
 | 5. Memory foundation | Verified subsystem; schema v5 and restore checks pass. SQLite snapshots stage separately, pass integrity verification before publication and preserve late destinations. Dashboard backup restored a seeded record into a separate database. Restore validates and migrates the same staged snapshot, guards the staging path against another restore and rejects destination journals before replacement. | Restore and verify ACL/environment on another Windows profile. |
-| 6. Memory intelligence | Implemented with approvals, provenance, retrieval and deletion controls. New memory records and corrections reject known credential formats and common password assignments in all six supported languages. Retrieval matches complete Unicode-normalized words. Correction and purge serialize against retention changes and use precise expiry checks. | Improve heuristic conflict matching only with measured need; complete owner-side persistence and real-session acceptance. |
-| 7. Conversation | Continuous loop, cancellation, mute and explicit context reset exist; dashboard Ready is idle and starts no audio/wake listener until the user chooses Start listening. Dashboard stop targets the active voice session and releases its reference when the session finishes. The offline evaluator shares live ONNX threshold and debounce rules. A generic model passed the synthetic wiring smoke. Stopping voice cancels waiting Whisper and Ollama work. A provider call already sent may return before the session exits. | A trained `Hey SHU` model, false-trigger/CPU measurements and live wake/mute acceptance are still absent. |
+| 6. Memory intelligence | Implemented with approvals, provenance, retrieval and deletion controls. New memory records and corrections reject known credential formats and common password assignments in all six supported languages. Retrieval matches complete Unicode-normalized words. Correction and purge serialize against retention changes and use precise expiry checks. Review tokenization keeps Indic marks and contractions with their words. Memory export publishes complete JSON and preserves prior files on collision. | Improve heuristic conflict matching only with measured need; complete owner-side persistence and real-session acceptance. |
+| 7. Conversation | Continuous loop, cancellation, mute and explicit context reset exist; dashboard Ready is idle and starts no audio/wake listener until the user chooses Start listening. Dashboard stop targets the active voice session and releases its reference when the session finishes. Older turns evicted from the 20-turn window are folded into a bounded rolling summary (900 characters, newest retained, user/assistant only) that CLI, voice and dashboard chat send as reference data inside the system instruction; covered by 10 regressions. The offline evaluator shares live ONNX threshold and debounce rules. A generic model passed the synthetic wiring smoke. Stopping voice cancels waiting Whisper and Ollama work. A provider call already sent may return before the session exits. | A trained `Hey SHU` model, false-trigger/CPU measurements and live wake/mute acceptance are still absent. |
 | 8. Security | Allowlist, approvals, audit, credentials, independent automation disable and stop controls implemented | Press the global hotkey during a live dashboard task and complete the target-user stop acceptance. |
-| 9. Desktop automation | Allowlisted/UIA/OCR paths and synthetic checks pass. A live isolated Windows CLI smoke verified approval-gated copy of reviewed bytes to an unused export path without showing file contents. Windows file moves now bind to the approved SHA-256 and an unused path in the same export tree. An isolated forward and inverse move passed. | Validate real target-application workflows, field entry and screen OCR quality. Generic delete and overwrite are unavailable. |
+| 9. Desktop automation | Allowlisted/UIA/OCR paths and synthetic checks pass. A live isolated Windows CLI smoke verified approval-gated copy of reviewed bytes to an unused export path without showing file contents. Windows file moves now bind to the approved SHA-256 and an unused path in the same export tree. An isolated forward and inverse move passed. Windows UI Automation read a hidden native checkbox in all three states. Indeterminate no longer satisfies unchecked verification. | Validate real target-application workflows, field entry and screen OCR quality. Generic delete and overwrite are unavailable. |
 | 10. Browser | Safe reader, tabs and non-submitting form preparation implemented; four earlier local-Qwen dry-runs rejected 50 attempts; a fifth 30-case local-only probe rejected all 30 as InvalidPlan with no persistence or execution | Broader threat-model coverage, other-target/model acceptance and a user-reviewed authenticated workflow remain; repeated local dry runs do not prove injection resistance. |
 | 11. WhatsApp | Contact book, exact preview and digest-confirmed send path implemented. When the provider result cannot establish acceptance, the shared draft records unknown and blocks the same draft from replay. | Store the token locally in Windows Credential Manager, confirm recipient consent and test live delivery. No token is stored; do not paste one into chat. |
 | 12. Office | Verified subsystem | No open gap for the phase exit check; retain the current Office smoke evidence. |
-| 13. Reminders | Persistence, recurrence, recovery and quiet-mode controls implemented; parser accepts bounded English schedule-first forms and localized Bengali/Hindi/Tamil/Telugu/Malayalam schedule-first forms with recognized reminder endings; ten regressions cover localized schedule-first daily/weekly recurrence; conflicting, vague and empty reminders are rejected. Daily and weekly recurrence preserves the first date and second. Stale scheduler jobs are skipped and a notifier cannot overwrite a later cancel, completion or snooze. The queued dashboard notification rechecks Quiet mode before speech. Relative durations follow elapsed time across DST. Calendar previews and manual saves reject nonexistent local times, with 19 DST regressions. Daily and weekly jobs skip future DST gaps and fire once at repeated times. The dashboard uses the Windows system zone and shows the saved zone offset. An exact scheduled occurrence is claimed in SQLite before delivery. Interrupted one-time attempts stay visible as uncertain and are not replayed. | Additional colloquial forms and live Windows notification/audio behavior, including quiet-mode behavior, still need acceptance. |
-| 14. Learning | Approval-gated preferences and version-bound workflow replay implemented | Complete target desktop accessibility and longer-term owner acceptance. |
+| 13. Reminders | Persistence, recurrence, recovery and quiet-mode controls implemented; parser accepts bounded English schedule-first forms and localized Bengali/Hindi/Tamil/Telugu/Malayalam schedule-first forms with recognized reminder endings; ten regressions cover localized schedule-first daily/weekly recurrence; conflicting, vague and empty reminders are rejected. Daily and weekly recurrence preserves the first date and second. Stale scheduler jobs are skipped and a notifier cannot overwrite a later cancel, completion or snooze. The queued dashboard notification rechecks Quiet mode before speech. Relative durations follow elapsed time across DST. Calendar previews and manual saves reject nonexistent local times, with 19 DST regressions. Daily and weekly jobs skip future DST gaps and fire once at repeated times. The dashboard uses the Windows system zone and shows the saved zone offset. An exact scheduled occurrence is claimed in SQLite before delivery. Interrupted one-time attempts stay visible as uncertain and are not replayed. Overdue decisions bind to the reviewed time. Two live schedulers produced one claim and one controlled notification callback for the same recovered occurrence. | Additional colloquial forms and live Windows notification/audio behavior, including quiet-mode behavior, still need acceptance. |
+| 14. Learning | Approval-gated preferences and version-bound workflow replay implemented. Edit, approve and revoke bind to the displayed revision. Replay checks request and steps again when the worker claims the task. An offscreen keyboard exercise completed review, approval, execution and revocation. | Complete target desktop accessibility and longer-term owner acceptance. |
 | 15. Task planner | Validation, FIFO queue, checkpoints, approval binding and crash recovery implemented; duration estimates use measured medians after three successful samples; registered read-only tools can use up to two transient-only retries with exponential backoff and an interruptible emergency-stop wait; local-Qwen plan-to-isolated-queue/preview smoke passed with cloud and automation disabled; isolated read-only `list_windows` target execution completed and drained the FIFO queue, with titles/results suppressed; focused retry/browser/stop suite passes 81 tests. Crash recovery prioritizes persisted in-flight state and resume claims bind the verified checkpoint. Subprocess and concurrent resume regressions pass. Resume and recovery approvals now bind the complete reviewed snapshot to the SQLite write. New Windows runner claims persist the process creation time so reused PIDs cannot prevent recovery. Legacy and unreadable live identities retain manual uncertainty. | Registered resource labels identify required tool capabilities and aggregate per task; they do not claim live CPU/RAM capacity. Modifying target-app workflows and physical power-loss recovery remain. |
 | 16. Email | Gmail OAuth, search/read and confirmed draft/send paths implemented. CLI reply and forward approvals bind the recipient, subject and delivery mode. Changes are rejected before a provider write. Outlook reply tests check one reviewed To address and empty Cc/Bcc on the returned draft before send. Dashboard send and provider-draft dialogs display literal text and attachment details and decline stale approval. Provider-draft saves and direct sends now require a usable provider reference and block replay of uncertain actions. Provider-native replies and forwards now commit an approval claim before a write and block identical retries after confirmed or uncertain outcomes. | Broader Gmail reply/forward/attachment/send acceptance; Outlook registration/consent remains unverified. The verified draft routing still requires a live Outlook acceptance check. |
-| 17. Dashboard | Voice, task, memory, reminder, communication, Cloud AI and automation controls implemented, including six response-style modes and a post-session voice request planner handoff with exact-step preview and approval; dashboard text size is adjustable from 8–24 points. The conversation transcript displays literal text and line breaks. Voice stop and queued Quiet mode have offscreen regression coverage. Offscreen shutdown tests confirm responsive closing with two active Qt workers and no new work. Offscreen tests verify time zone persistence and exact, plain-text communication confirmations. A labelled Voice activity line distinguishes capture, processing and speech output and preserves the mute indicator. The SHU menu can create a verified SQLite backup on a worker thread without rotating earlier backups. The reminder list surfaces uncertain delivery separately from pending and permits explicit rescheduling. Dashboard Emergency Stop cancels the active chat and suppresses a late response. A fresh request has independent cancellation. | Target-desktop keyboard/screen-reader acceptance and full interactive/provider acceptance remain. |
-| 18. Hardening | Latest full verification: 672 tests in 62.27 seconds; dependency, compile, database and Doctor checks pass; local Qwen benchmark/soak reports Ollama timings, model footprint, SHU data-volume free space, CPU/RAM and latency; a FIFO gate prevents Ollama and Whisper CPU overlap | Target-device RAM headroom, full hardware voice path, wake-word acceptance, complete threat-model run and physical power-loss test remain. |
-| 19. Release | Setup/startup/recovery tooling, verified 2026-11-26 r11 personal source ZIP and extracted-copy schema-5 database CLI smoke exist. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. A full disposable setup from the prior release used fresh PyPI packages and launched an isolated managed browser and offscreen dashboard on this host. The extracted r11 source passed all 672 tests in 53.97 seconds in an isolated environment. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain. |
+| 17. Dashboard | Voice, task, memory, reminder, communication, Cloud AI and automation controls implemented, including six response-style modes and a post-session voice request planner handoff with exact-step preview and approval; dashboard text size is adjustable from 8–24 points. The conversation transcript displays literal text and line breaks. Voice stop and queued Quiet mode have offscreen regression coverage. Offscreen shutdown tests confirm responsive closing with two active Qt workers and no new work. Offscreen tests verify time zone persistence and exact, plain-text communication confirmations. A labelled Voice activity line distinguishes capture, processing and speech output and preserves the mute indicator. The SHU menu can create a verified SQLite backup on a worker thread without rotating earlier backups. The reminder list surfaces uncertain delivery separately from pending and permits explicit rescheduling. Dashboard Emergency Stop cancels the active chat and suppresses a late response. A fresh request has independent cancellation. Offscreen workflow controls passed a five-dialog keyboard test using one synthetic task. | Target-desktop keyboard/screen-reader acceptance and full interactive/provider acceptance remain. |
+| 18. Hardening | Latest full pytest run: 744 tests in 84.68 seconds; `pip check` and compilation pass; extracted-copy database integrity passes at schema v5. The earlier full verification also ran Doctor and reported only the missing WhatsApp token and trained wake model. Local Qwen benchmark/soak reports Ollama timings, model footprint, SHU data-volume free space, CPU/RAM and latency; a FIFO gate prevents Ollama and Whisper CPU overlap | Target-device RAM headroom, full hardware voice path, wake-word acceptance, complete threat-model run and physical power-loss test remain. |
+| 19. Release | Setup/startup/recovery tooling and a verified 2026-11-26 r14 personal source ZIP exist: 117 entries, 329,435 bytes, SHA-256 `84f236334425a583e434bbb552b48e6e472573821892a9ec8b5e4f872d296a6a`, CRC/path/syntax checks, member-byte match and an isolated schema-v5 `db init`/`db verify`. The manifests pin 23 direct runtime dependencies. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain; hosted CI is still blocked by the account billing restriction. |
 
 ## External and hardware prerequisites
 
@@ -504,9 +627,10 @@ token and missing trained `Hey SHU` model.
 
 ## Resume point
 
-Resume from the r11 software checkpoint and compare the working tree with
-`origin/main`. Continue with the acceptance items in the phase rows and publish
-verified source and progress updates to the same branch. Rerun Windows CI after
+On resume, fetch `origin/main` and compare it with the r14 checkpoint commit
+on `main`. Push the verified checkpoint, then confirm the published SHA and hosted
+CI result. Continue with the remaining acceptance
+items in the phase rows. Rerun Windows CI after
 GitHub restores runner access. Live checks still
 need owner audio and consented six-language speech, the custom wake model,
 WhatsApp setup and recipient consent, reviewed Gmail actions and Outlook

@@ -113,3 +113,53 @@ def test_startup_refuses_missing_console_interpreter_before_creating_directory(t
     assert result.returncode != 0
     assert "virtual environment is missing" in result.stderr
     assert not isolated_startup.exists()
+
+
+@pytest.mark.parametrize("scenario", ["new", "existing", "late", "missing-template", "directory"])
+def test_setup_publishes_env_without_overwriting_user_configuration(tmp_path, scenario):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copyfile(PROJECT_ROOT / "scripts" / "setup.ps1", scripts / "setup.ps1")
+    launcher = tmp_path / ".venv/Scripts/python.exe"
+    launcher.parent.mkdir(parents=True)
+    launcher.touch()
+    config = tmp_path / ".env"
+    template = b"SHU_TEST=template\r\n"
+    if scenario != "missing-template":
+        (tmp_path / ".env.example").write_bytes(template)
+    if scenario == "existing":
+        config.write_bytes(b"existing")
+    elif scenario == "directory":
+        config.mkdir()
+
+    wrapper = scripts / "simulate-setup.ps1"
+    wrapper.write_text(
+        r"""
+param([string]$Scenario)
+$ErrorActionPreference = 'Stop'
+function Test-Path {
+    param([string]$LiteralPath, [string]$PathType = 'Any')
+    $found = Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath -PathType $PathType
+    if ($Scenario -eq 'late' -and -not $found -and [IO.Path]::GetFileName($LiteralPath) -eq '.env') {
+        [IO.File]::WriteAllText($LiteralPath, 'late')
+    }
+    return $found
+}
+# Stop this isolated setup before it invokes any dependency installer.
+function Push-Location { param([string]$LiteralPath) throw 'Fixture reached dependency setup' }
+try {
+    & (Join-Path $PSScriptRoot 'setup.ps1') -CoreOnly
+} catch {
+    if ($_.Exception.Message -ne 'Fixture reached dependency setup') { throw }
+}
+""", encoding="ascii",
+    )
+    result = run_isolated_powershell(wrapper, scenario)
+    if scenario in {"missing-template", "directory"}:
+        assert result.returncode != 0
+        assert not config.is_file()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert config.read_bytes() == {"new": template, "existing": b"existing", "late": b"late"}[scenario]
+        assert ("Created .env from the template" in result.stdout) == (scenario == "new")
+    assert not list(tmp_path.glob(".env.*.tmp"))

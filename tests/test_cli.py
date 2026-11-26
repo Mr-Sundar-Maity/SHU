@@ -38,6 +38,48 @@ def test_console_encoding_uses_utf8_when_stream_supports_reconfigure(monkeypatch
     ]
 
 
+@pytest.mark.parametrize("clear", [False, True])
+@pytest.mark.parametrize("concurrent_correction", [False, True])
+def test_memory_retention_preserves_a_concurrent_content_correction(
+    tmp_path, monkeypatch, capsys, clear, concurrent_correction,
+):
+    from datetime import datetime, timedelta, timezone
+    from app import cli
+    from memory.memory_manager import MemoryManager
+
+    database = Database(tmp_path / "memory-retention.db")
+    database.initialize()
+    manager = MemoryManager(database)
+    other = MemoryManager(Database(database.path))
+    old_deadline = datetime.now(timezone.utc) + timedelta(days=1)
+    original = manager.add_memory("Original garden note", approved=True, retention_until=old_deadline)
+    new_deadline = datetime.now(timezone.utc) + timedelta(days=2)
+    read_memory = manager.get_memory
+
+    def read_then_correct(memory_id):
+        reviewed = read_memory(memory_id)
+        if concurrent_correction:
+            other.update_memory(memory_id, "Concurrent correction", approved=True)
+        return reviewed
+
+    monkeypatch.setattr(cli, "_database", lambda: database)
+    monkeypatch.setattr(cli, "MemoryManager", lambda _database: manager)
+    monkeypatch.setattr(manager, "get_memory", read_then_correct)
+    result = cli.memory_retention(original.memory_id, new_deadline.isoformat(), clear=clear, confirmed=True)
+    saved = other.get_memory(original.memory_id)
+    if concurrent_correction:
+        assert result == 1
+        assert saved.content == "Concurrent correction"
+        assert saved.retention_until == original.retention_until
+        assert "changed since review" in capsys.readouterr().out
+    else:
+        assert result == 0
+        assert saved.content == original.content
+        assert saved.retention_until == (None if clear else new_deadline.isoformat(timespec="microseconds"))
+    with database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0] == 2
+
+
 def test_provider_draft_command_requires_a_digest_and_confirmation_flag():
     args = build_parser().parse_args(
         [

@@ -57,7 +57,10 @@ class ProceduralMemory:
             "version": int(row["version"]),
         }
 
-    def update(self, procedure_id: str, name: str, steps: list[dict], *, approved: bool = False) -> None:
+    def update(
+        self, procedure_id: str, name: str, steps: list[dict], *,
+        approved: bool = False, expected_version: int | None = None,
+    ) -> None:
         if not approved:
             raise PermissionError("Editing a workflow requires explicit approval")
         clean_name, serialized_steps = self._validated(name, steps)
@@ -67,14 +70,16 @@ class ProceduralMemory:
                 cursor = connection.execute(
                     "UPDATE procedural_memories SET name=?,steps_json=?,version=version+1,"
                     "approval_status='pending',updated_at=? WHERE procedure_id=? "
-                    "AND approval_status IN ('approved','pending')",
-                    (clean_name, serialized_steps, now, procedure_id),
+                    "AND approval_status IN ('approved','pending') AND version=COALESCE(?,version)",
+                    (clean_name, serialized_steps, now, procedure_id, expected_version),
                 )
                 if cursor.rowcount != 1:
-                    raise ValueError("Only an active workflow can be edited")
+                    raise ValueError("Workflow changed since review or is no longer active")
                 self._audit(connection, procedure_id, "workflow.update", "pending_reapproval")
 
-    def approve(self, procedure_id: str, *, approved: bool = False) -> None:
+    def approve(
+        self, procedure_id: str, *, approved: bool = False, expected_version: int | None = None
+    ) -> None:
         if not approved:
             raise PermissionError("Approving a workflow requires explicit approval")
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -82,14 +87,16 @@ class ProceduralMemory:
             with connection:
                 cursor = connection.execute(
                     "UPDATE procedural_memories SET approval_status='approved',updated_at=? "
-                    "WHERE procedure_id=? AND approval_status='pending'",
-                    (now, procedure_id),
+                    "WHERE procedure_id=? AND approval_status='pending' AND version=COALESCE(?,version)",
+                    (now, procedure_id, expected_version),
                 )
                 if cursor.rowcount != 1:
-                    raise ValueError("Only a pending workflow can be approved")
+                    raise ValueError("Workflow changed since review or is no longer pending")
                 self._audit(connection, procedure_id, "workflow.approve", "approved")
 
-    def revoke(self, procedure_id: str, *, approved: bool = False) -> None:
+    def revoke(
+        self, procedure_id: str, *, approved: bool = False, expected_version: int | None = None
+    ) -> None:
         if not approved:
             raise PermissionError("Revoking a workflow requires explicit approval")
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -97,11 +104,12 @@ class ProceduralMemory:
             with connection:
                 cursor = connection.execute(
                     "UPDATE procedural_memories SET approval_status='revoked',updated_at=? "
-                    "WHERE procedure_id=? AND approval_status IN ('approved','pending')",
-                    (now, procedure_id),
+                    "WHERE procedure_id=? AND approval_status IN ('approved','pending') "
+                    "AND version=COALESCE(?,version)",
+                    (now, procedure_id, expected_version),
                 )
                 if cursor.rowcount != 1:
-                    raise ValueError("Only an active workflow can be revoked")
+                    raise ValueError("Workflow changed since review or is no longer active")
                 self._audit(connection, procedure_id, "workflow.revoke", "revoked")
 
     def list_approved(self) -> list[sqlite3.Row]:

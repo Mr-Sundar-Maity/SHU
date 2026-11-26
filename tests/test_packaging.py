@@ -1,17 +1,38 @@
 import hashlib
+import re
+from pathlib import Path
+from urllib.parse import urlsplit
 import zipfile
 
 import pytest
 
-from scripts.package_personal import build_bundle, verify_archive
+from scripts.package_personal import REQUIRED_SETUP_FILES, build_bundle, collect_files, verify_archive
 
 
-def test_personal_bundle_excludes_secrets_user_data_and_generated_files(tmp_path):
+@pytest.fixture
+def bootstrap_tree(tmp_path):
     root = tmp_path / "shu"
+    for name in REQUIRED_SETUP_FILES:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    return root
+
+
+def test_readme_relative_links_are_in_personal_bundle_manifest():
+    root = Path(__file__).resolve().parents[1]
+    members = {relative.as_posix() for _, relative in collect_files(root)}
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    for target in re.findall(r"\]\(([^()\s]+)\)", readme):
+        link = urlsplit(target)
+        if link.path and not link.scheme and not link.netloc:
+            assert link.path in members, f"Missing linked file: {target}"
+
+
+def test_personal_bundle_excludes_secrets_user_data_and_generated_files(bootstrap_tree):
+    root = bootstrap_tree
     (root / "app" / "voice").mkdir(parents=True)
-    (root / "database").mkdir()
     (root / "docs").mkdir()
-    (root / "scripts").mkdir()
     (root / "tests").mkdir()
     (root / "credentials").mkdir()
     (root / "tmp" / "pdfs").mkdir(parents=True)
@@ -73,6 +94,25 @@ def test_archive_verifier_rejects_unsafe_paths(tmp_path, unsafe_name):
 def test_archive_verifier_accepts_utf8_bom_in_python_source(tmp_path):
     archive_path = tmp_path / "bom.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
+        for name in REQUIRED_SETUP_FILES:
+            archive.writestr(name, "")
         archive.writestr("app/module.py", "\ufeffvalue = 'ok'\n".encode("utf-8"))
 
-    verify_archive(archive_path, {"app/module.py"})
+    verify_archive(archive_path, REQUIRED_SETUP_FILES | {"app/module.py"})
+
+
+@pytest.mark.parametrize("missing", sorted(REQUIRED_SETUP_FILES))
+def test_incomplete_checkout_cannot_publish_a_bundle(bootstrap_tree, missing):
+    (bootstrap_tree / missing).unlink()
+    with pytest.raises(ValueError, match="Missing required setup files") as error:
+        build_bundle(bootstrap_tree)
+    assert missing in str(error.value)
+    assert not (bootstrap_tree / "dist").exists()
+
+
+def test_archive_verifier_rejects_matching_but_incomplete_inventory(tmp_path):
+    archive_path = tmp_path / "incomplete.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("app/cli.py", "")
+    with pytest.raises(ValueError, match="Missing required setup files"):
+        verify_archive(archive_path, {"app/cli.py"})

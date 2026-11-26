@@ -37,7 +37,7 @@ def test_learning_never_stores_authentication_secrets(tmp_path):
         learning.save_preference("favorite_topic", "my access token", approved=True)
 
 
-def test_workflow_replay_is_revalidated_and_requires_approval(tmp_path):
+def test_workflow_replay_is_revalidated_and_requires_approval(tmp_path, monkeypatch):
     database = Database(tmp_path / "shu.db")
     database.initialize()
     learning = LearningService(database)
@@ -72,6 +72,22 @@ def test_workflow_replay_is_revalidated_and_requires_approval(tmp_path):
         expected_version=preview["version"],
     )
     assert report["status"] == "completed"
+    assert calls == ["language"]
+
+    execute = executor.execute
+
+    def change_task_before_claim(task_id, **kwargs):
+        with database.connect() as connection, connection:
+            connection.execute(
+                "UPDATE tasks SET request='Another request' WHERE task_id=?", (task_id,)
+            )
+        return execute(task_id, **kwargs)
+
+    monkeypatch.setattr(executor, "execute", change_task_before_claim)
+    with pytest.raises(ValueError, match="changed"):
+        learning.run_workflow(
+            procedure_id, planner, executor, approved=True, expected_version=preview["version"]
+        )
     assert calls == ["language"]
 
     with database.connect() as connection:
@@ -182,6 +198,26 @@ def test_workflow_task_insert_uses_the_version_check_transaction(tmp_path, monke
         ).fetchone()
     assert task["status"] == "planned"
     assert '"key": "language"' in task["plan_json"]
+
+
+def test_workflow_approval_checks_validated_version_at_write(tmp_path):
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    learning = LearningService(database)
+    other = LearningService(Database(database.path))
+    steps = [{"tool": "list_windows", "arguments": {}}]
+    procedure_id = learning.save_workflow("First", steps, approved=True)
+    learning.procedures.update(procedure_id, "Reviewed", steps, approved=True)
+
+    class EditingPlanner:
+        def validate_steps(self, reviewed_steps):
+            other.procedures.update(procedure_id, "New revision", steps, approved=True)
+            return reviewed_steps
+
+    with pytest.raises(ValueError, match="changed since review"):
+        learning.approve_workflow(procedure_id, EditingPlanner(), approved=True)
+    saved = learning.procedures.get(procedure_id)
+    assert (saved["name"], saved["approval_status"]) == ("New revision", "pending")
 
 
 def test_task_feedback_is_approved_local_audited_and_secret_filtered(tmp_path):

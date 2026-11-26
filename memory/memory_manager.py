@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
+import tempfile
 import unicodedata
 import uuid
 from dataclasses import dataclass
@@ -207,20 +207,19 @@ class MemoryManager:
                 "ORDER BY updated_at DESC, memory_id LIMIT ?",
                 (now, max_memories),
             ).fetchall()
-        records = [_record(row) for row in rows]
+        records = [
+            (_record(row), _word_tokens(row["content"], keep_apostrophes=True))
+            for row in rows
+        ]
         results: list[MemoryReviewCandidate] = []
         generic_words = (
             _REVIEW_NEGATIONS
             | _REVIEW_STOP_WORDS
             | _REVIEW_PREFERENCE_WORDS
         )
-        for index, first in enumerate(records):
-            first_words = _review_words(first.content)
-            first_normalized = " ".join(first_words)
-            for second in records[index + 1 :]:
-                second_words = _review_words(second.content)
-                second_normalized = " ".join(second_words)
-                if first_normalized and first_normalized == second_normalized:
+        for index, (first, first_words) in enumerate(records):
+            for second, second_words in records[index + 1 :]:
+                if first_words and first_words == second_words:
                     results.append(
                         MemoryReviewCandidate(
                             "duplicate", first, second,
@@ -263,12 +262,16 @@ class MemoryManager:
         confidence: float | None = None,
         sensitivity: str | None = None,
         retention_until: str | datetime | None | object = _UNSET,
+        expected_record: MemoryRecord | object = _UNSET,
     ) -> MemoryRecord:
+        """Correct an active memory, optionally matching the record reviewed for approval."""
         with self.database.connect() as connection:
             with connection:
                 # A correction inherits metadata from the same locked row it updates.
                 connection.execute("BEGIN IMMEDIATE")
                 current = self._read_approved_memory(connection, memory_id)
+                if expected_record is not _UNSET and current != expected_record:
+                    raise ValueError("Memory changed since review")
                 new_confidence = current.confidence if confidence is None else confidence
                 new_sensitivity = current.sensitivity if sensitivity is None else sensitivity
                 validate_memory(
@@ -320,15 +323,22 @@ class MemoryManager:
                     )
         return len(rows)
 
-    def delete_memory(self, memory_id: str, *, approved: bool = False) -> bool:
+    def delete_memory(
+        self, memory_id: str, *, approved: bool = False,
+        expected_record: MemoryRecord | object = _UNSET,
+    ) -> bool:
+        """Delete a memory, optionally matching the record reviewed for approval."""
         if not approved:
             raise PermissionError("Deleting a memory requires explicit approval")
         with self.database.connect() as connection:
             with connection:
-                exists = connection.execute(
-                    "SELECT 1 FROM memories WHERE memory_id=?", (memory_id,)
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT * FROM memories WHERE memory_id=?", (memory_id,)
                 ).fetchone()
-                if exists is None:
+                if expected_record is not _UNSET and (row is None or _record(row) != expected_record):
+                    raise ValueError("Memory changed since review")
+                if row is None:
                     return False
                 connection.execute(
                     "DELETE FROM episodic_memories WHERE memory_id=?", (memory_id,)
@@ -370,15 +380,24 @@ class MemoryManager:
                 for row in rows
             ],
         }
+        temporary = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", prefix=".memories-",
+            suffix=".tmp", dir=export_dir, delete=False,
+        )
+        staged = Path(temporary.name)
         try:
-            with destination.open("x", encoding="utf-8", newline="\n") as stream:
+            with temporary as stream:
                 json.dump(payload, stream, ensure_ascii=False, indent=2)
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-        except Exception:
-            destination.unlink(missing_ok=True)
-            raise
+            # Windows rename and POSIX hard-link creation both refuse a late collision.
+            if os.name == "nt":
+                os.rename(staged, destination)
+            else:
+                os.link(staged, destination)
+        finally:
+            staged.unlink(missing_ok=True)
         return destination
 
     @staticmethod
@@ -399,13 +418,18 @@ class MemoryManager:
         )
 
 
-def _word_tokens(content: str) -> list[str]:
+def _word_tokens(content: str, *, keep_apostrophes: bool = False) -> list[str]:
     normalized = unicodedata.normalize("NFKC", content).casefold()
     words: list[str] = []
     current: list[str] = []
-    for character in normalized:
+    for index, character in enumerate(normalized):
         if unicodedata.category(character)[0] in {"L", "M", "N"}:
             current.append(character)
+        elif (
+            keep_apostrophes and current and character in {"'", "’"}
+            and index + 1 < len(normalized) and normalized[index + 1].isalnum()
+        ):
+            current.append("'")
         elif current:
             words.append("".join(current))
             current.clear()
@@ -418,11 +442,6 @@ def _memory_query_terms(query: str) -> list[str]:
     return list(dict.fromkeys(
         word for word in _word_tokens(query) if word not in _MEMORY_QUERY_STOP_WORDS
     ))
-
-
-def _review_words(content: str) -> list[str]:
-    normalized = unicodedata.normalize("NFKC", content).casefold()
-    return re.findall(r"[^\W_]+(?:['’][^\W_]+)?", normalized, flags=re.UNICODE)
 
 
 def _normalize_retention(value: str | datetime | None) -> str | None:

@@ -20,9 +20,31 @@ if (-not (Test-Path -LiteralPath $pythonPath)) {
     }
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $projectRoot '.env'))) {
-    Copy-Item -LiteralPath (Join-Path $projectRoot '.env.example') -Destination (Join-Path $projectRoot '.env')
-    Write-Warning 'Created .env from the template. Review settings and add provider credentials only if needed.'
+$envPath = Join-Path $projectRoot '.env'
+if (-not (Test-Path -LiteralPath $envPath -PathType Leaf)) {
+    $templateBytes = [IO.File]::ReadAllBytes((Join-Path $projectRoot '.env.example'))
+    $stagedPath = Join-Path $projectRoot ('.env.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    $stream = [IO.File]::Open($stagedPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        try {
+            $stream.Write($templateBytes, 0, $templateBytes.Length)
+            $stream.Flush($true)
+        } finally {
+            $stream.Dispose()
+        }
+        try {
+            # Move publishes the complete template and refuses to replace a late configuration.
+            [IO.File]::Move($stagedPath, $envPath)
+            Write-Warning 'Created .env from the template. Review settings and add provider credentials only if needed.'
+        } catch [IO.IOException] {
+            $errorCode = $_.Exception.GetBaseException().HResult -band 0xffff
+            if ($errorCode -notin @(80, 183) -or -not [IO.File]::Exists($envPath)) {
+                throw
+            }
+        }
+    } finally {
+        [IO.File]::Delete($stagedPath)
+    }
 }
 
 Push-Location -LiteralPath $projectRoot

@@ -58,6 +58,7 @@ def test_chat_worker_reports_provider_model_and_response(monkeypatch, tmp_path):
             from app.config import response_style_instruction
 
             assert response_style_instruction("friendly") in kwargs["system_instruction"]
+            assert "Earlier conversation summary" not in kwargs["system_instruction"]
             kwargs["on_status"]("Generating with local model qwen2.5:1.5b")
             return "Hello!"
 
@@ -75,6 +76,111 @@ def test_chat_worker_reports_provider_model_and_response(monkeypatch, tmp_path):
         "Generating with local model qwen2.5:1.5b",
     ]
     assert finished == [("Hello!", "")]
+
+
+def test_chat_worker_appends_the_rolling_conversation_summary(monkeypatch, tmp_path):
+    from app.interface import dashboard
+
+    settings = Settings.from_env({"SHU_DATA_DIR": str(tmp_path)})
+    seen = {}
+
+    class FakeEngine:
+        def __init__(self, _settings):
+            pass
+
+        def local_model_loaded(self):
+            return True
+
+        def ask(self, question, **kwargs):
+            seen["instruction"] = kwargs["system_instruction"]
+            return "ok"
+
+    monkeypatch.setattr(dashboard, "SHUAIEngine", FakeEngine)
+    worker = _ChatWorker(
+        settings, "next question", [], conversation_summary="User: earlier question"
+    )
+    worker.run()
+
+    assert "Earlier conversation summary" in seen["instruction"]
+    assert "User: earlier question" in seen["instruction"]
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+def test_dashboard_voice_language_mode_and_silent_prompts(tmp_path, monkeypatch, automatic):
+    from app.interface import dashboard
+    from app.voice.voice_assistant import GREETINGS, REPEAT_PROMPTS, SHUVoiceAssistant
+
+    settings = Settings.from_env({
+        "SHU_DATA_DIR": str(tmp_path),
+        "SHU_DEFAULT_LANGUAGE": "bn",
+        "SHU_MICROPHONE_DEVICE": "",
+    })
+    transcripts = []
+    if automatic:
+        transcripts.append(("Uncertain phrase", "en", 0.1))
+    transcripts.extend([("hello", "en", 0.99), ("stop", "en", 0.99)])
+    requests = []
+    languages = []
+    displayed = []
+    spoken = []
+
+    class Input:
+        def listen_and_transcribe(self, *, language, **kwargs):
+            requests.append(language)
+            text, code, confidence = transcripts.pop(0)
+            return {"text": text, "language": code, "language_probability": confidence}
+
+    class SilentOutput:
+        def set_language(self, language):
+            languages.append(language)
+
+        def speak(self, text):
+            spoken.append(text)
+            return False
+
+        def stop(self):
+            pass
+
+    def assistant(**kwargs):
+        return SHUVoiceAssistant(
+            stt=Input(), tts=SilentOutput(), ai=SimpleNamespace(ask=lambda *a, **kw: "Sample answer"),
+            **kwargs,
+        )
+
+    window = SHUDashboard(settings)
+    monkeypatch.setattr(dashboard, "SHUVoiceAssistant", assistant)
+
+    def run_worker(worker, finished):
+        displayed.append(window.voice_language.text())
+        worker.recognition_language.connect(lambda _: displayed.append(window.voice_language.text()))
+        worker.finished.connect(finished)
+        worker.run()
+
+    window._run_worker = run_worker
+    try:
+        window.language_combo.setCurrentIndex(window.language_combo.findData("ta"))
+        assert not window.auto_language_check.isChecked()
+        if automatic:
+            QTest.keyClick(window.auto_language_check, Qt.Key.Key_Space)
+        assert window._runtime_settings().default_language == "ta"
+        window._start_voice()
+        assert not transcripts
+        assert requests == ([None] * 3 if automatic else ["ta"] * 2)
+        assert languages == (["ta", "en", "en"] if automatic else ["ta"] * 3)
+        assert spoken[0] == GREETINGS["ta"]
+        transcript = window.transcript.toPlainText()
+        assert GREETINGS["ta"] in transcript
+        assert transcript.count("Sample answer") == 1
+        assert [turn.content for turn in window.history.recent()] == ["hello", "Sample answer"]
+        if automatic:
+            assert REPEAT_PROMPTS["ta"] in transcript
+            assert displayed[:2] == ["Voice language: Waiting for language detection"] * 2
+            assert displayed[-1] == "Voice language: English (en)"
+        else:
+            assert set(displayed) == {"Voice language: Tamil (ta)"}
+        assert window.voice_language.isHidden()
+    finally:
+        window.close()
 
 
 def test_dashboard_marks_retrieved_memory_sensitive(tmp_path, monkeypatch):
@@ -145,6 +251,126 @@ def test_dashboard_emergency_stop_discards_late_chat_and_preserves_next_request(
         assert window.emergency_stop.is_stopped
         window._chat_finished("Second reply", "")
         assert "Second reply" in window.transcript.toPlainText()
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("action", ["edit", "approve", "revoke"])
+def test_dashboard_workflow_decision_binds_the_displayed_version(tmp_path, monkeypatch, action):
+    from PySide6.QtWidgets import QInputDialog
+
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    store = window.learning.procedures
+    steps = [{"tool": "list_windows", "arguments": {}}]
+    try:
+        procedure_id = store.add("Original", steps, approved=True)
+        store.update(procedure_id, "Displayed", steps, approved=True)
+        window._refresh_workflows()
+        window.workflow_table.selectRow(0)
+        monkeypatch.setattr(QInputDialog, "getText", lambda *a, **kw: ("My edit", True))
+        monkeypatch.setattr(QInputDialog, "getMultiLineText", lambda *a: (json.dumps(steps), True))
+
+        def edit_while_dialog_is_open(*args):
+            store.update(procedure_id, "Concurrent revision", steps, approved=True)
+            return QMessageBox.StandardButton.Yes
+
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "question", edit_while_dialog_is_open)
+        monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, message: warnings.append(message))
+        getattr(window, f"_{action}_workflow")()
+
+        assert len(warnings) == 1 and "changed since review" in warnings[0]
+        latest = store.get(procedure_id)
+        assert (latest["name"], latest["approval_status"]) == ("Concurrent revision", "pending")
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("action", ["edit", "delete"])
+@pytest.mark.parametrize("change_before_dialog", [False, True])
+def test_dashboard_memory_decision_binds_the_displayed_record(
+    tmp_path, monkeypatch, action, change_before_dialog,
+):
+    from PySide6.QtWidgets import QInputDialog
+    from database.database import Database
+    from memory.memory_manager import MemoryManager
+
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    other = MemoryManager(Database(window.database.path))
+    try:
+        original = other.add_memory("Displayed garden note", approved=True)
+        window._refresh_memories()
+        window.memory_table.selectRow(0)
+        monkeypatch.setattr(QInputDialog, "getMultiLineText", lambda *args: ("My correction", True))
+        if change_before_dialog:
+            other.update_memory(original.memory_id, "Concurrent correction", approved=True)
+
+        def confirm_after_change(*args):
+            if not change_before_dialog:
+                other.update_memory(original.memory_id, "Concurrent correction", approved=True)
+            return QMessageBox.StandardButton.Yes
+
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "question", confirm_after_change)
+        monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, message: warnings.append(message))
+        getattr(window, f"_{action}_memory")()
+        assert len(warnings) == 1 and "changed since review" in warnings[0]
+        assert other.get_memory(original.memory_id).content == "Concurrent correction"
+        assert window.memory_table.item(0, 1).text() == "Concurrent correction"
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("action", ["edit", "delete"])
+def test_dashboard_memory_decision_applies_to_unchanged_record(tmp_path, monkeypatch, action):
+    from PySide6.QtWidgets import QInputDialog, QTableWidget
+
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    try:
+        original = window.memories.add_memory("Displayed garden note", approved=True)
+        window._refresh_memories()
+        window.memory_table.selectRow(0)
+        assert window.memory_table.editTriggers() == QTableWidget.EditTrigger.NoEditTriggers
+        monkeypatch.setattr(QInputDialog, "getMultiLineText", lambda *args: ("My correction", True))
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+        getattr(window, f"_{action}_memory")()
+        assert warnings == []
+        if action == "edit":
+            assert window.memories.get_memory(original.memory_id).content == "My correction"
+            assert window.memory_table.item(0, 1).text() == "My correction"
+        else:
+            assert window.memories.list_memories() == []
+            assert window.memory_table.rowCount() == 0
+    finally:
+        window.close()
+
+
+def test_dashboard_workflow_worker_checks_the_approved_steps(tmp_path, monkeypatch):
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    steps = [{"tool": "list_windows", "arguments": {}}]
+    try:
+        workflow = window.learning.save_workflow("Windows review", steps, approved=True)
+        window._refresh_workflows()
+        window.workflow_table.selectRow(0)
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+        workers = []
+        window._run_worker = lambda worker, callback: workers.append(worker)
+        window._replay_workflow()
+        worker, = workers
+        assert worker.expected_request == "Approved workflow: Windows review"
+        assert worker.expected_steps == window.learning.preview_workflow(workflow, window.planner)["steps"]
+        with window.database.connect() as connection, connection:
+            connection.execute(
+                "UPDATE tasks SET plan_json=? WHERE task_id=?",
+                (json.dumps(steps + steps), worker.task_id),
+            )
+        results = []
+        worker.finished.connect(lambda report, error: results.append((report, error)))
+        worker.run()
+        assert len(results) == 1 and results[0][0] == ""
+        assert "Task plan changed after review" in results[0][1]
     finally:
         window.close()
 
@@ -935,6 +1161,28 @@ def test_task_worker_passes_reviewed_queue_snapshot():
     assert executor.call[1]["expected_steps"] == expected_steps
     assert callable(executor.call[1]["confirm"])
     assert result == [(json.dumps({"status": "completed"}, ensure_ascii=False, indent=2), "")]
+
+
+def test_dashboard_overdue_dialog_keeps_a_reminder_snoozed_during_review(tmp_path, monkeypatch):
+    from app.notifications.reminders import ReminderService
+
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    other = ReminderService(window.database)
+    try:
+        reminder_id = other.create("Reviewed", datetime.now(timezone.utc) - timedelta(days=1))
+        reviewed, = other.list_pending()
+
+        def snooze_while_reviewing(*_args):
+            other.snooze(reminder_id, 10)
+            return QMessageBox.StandardButton.No
+
+        monkeypatch.setattr(QMessageBox, "question", snooze_while_reviewing)
+        window._ask_overdue(reviewed)
+        assert "Overdue decision skipped" in window.status.text()
+        assert other.list_pending()[0]["due_at"] != reviewed["due_at"]
+        assert window.reminder_table.rowCount() == 1
+    finally:
+        window.close()
 
 
 def test_dashboard_schedules_overdue_reminder_review_on_startup(tmp_path, monkeypatch):

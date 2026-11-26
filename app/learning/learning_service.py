@@ -193,6 +193,7 @@ class LearningService:
         planner,
         *,
         approved: bool = False,
+        expected_version: int | None = None,
     ) -> None:
         if not approved:
             raise PermissionError("Editing a workflow requires explicit approval")
@@ -202,19 +203,27 @@ class LearningService:
             name,
             validated_steps,
             approved=True,
+            expected_version=expected_version,
         )
 
-    def approve_workflow(self, procedure_id: str, planner, *, approved: bool = False) -> None:
+    def approve_workflow(
+        self, procedure_id: str, planner, *,
+        approved: bool = False, expected_version: int | None = None,
+    ) -> None:
         if not approved:
             raise PermissionError("Approving a workflow requires explicit approval")
         record = self.procedures.get(procedure_id)
+        if expected_version is not None and record["version"] != expected_version:
+            raise ValueError("Workflow changed since review")
         if record["approval_status"] != "pending":
             raise ValueError("Only a pending workflow can be approved")
         planner.validate_steps(record["steps"])
-        self.procedures.approve(procedure_id, approved=True)
+        self.procedures.approve(procedure_id, approved=True, expected_version=record["version"])
 
-    def revoke_workflow(self, procedure_id: str, *, approved: bool = False) -> None:
-        self.procedures.revoke(procedure_id, approved=approved)
+    def revoke_workflow(
+        self, procedure_id: str, *, approved: bool = False, expected_version: int | None = None
+    ) -> None:
+        self.procedures.revoke(procedure_id, approved=approved, expected_version=expected_version)
 
     def preview_workflow(self, procedure_id: str, planner) -> dict:
         """Revalidate a stored workflow against the currently registered tools."""
@@ -286,10 +295,18 @@ class LearningService:
             raise PermissionError("Replaying a workflow requires explicit approval")
         if expected_version is None:
             raise ValueError("Replay requires the reviewed workflow version")
+        preview = self.preview_workflow(procedure_id, planner)
+        if preview["version"] != expected_version:
+            raise ValueError("Workflow changed since review; review it again before replay")
         task_id = self.create_workflow_task(
             procedure_id,
             planner,
             expected_version=expected_version,
             approved=True,
         )
-        return executor.execute(task_id, confirm=confirm)
+        return executor.execute(
+            task_id,
+            confirm=confirm,
+            expected_request=f"Approved workflow: {preview['name']}",
+            expected_steps=preview["steps"],
+        )

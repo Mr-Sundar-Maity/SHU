@@ -18,6 +18,19 @@ ROOT_FILES = (
 )
 ROOT_DIRECTORIES = ("app", "database", "memory", "scripts", "tests")
 DOC_FILES = ("THIRD_PARTY_LICENSES.csv",)
+REQUIRED_SETUP_FILES = {
+    ".env.example",
+    "requirements.txt",
+    "requirements-v1.txt",
+    "scripts/install.ps1",
+    "scripts/setup.ps1",
+    "scripts/secure-data.ps1",
+    "scripts/verify.ps1",
+    "app/cli.py",
+    "app/config.py",
+    "app/interface/dashboard.py",
+    "database/database.py",
+}
 EXCLUDED_PARTS = {
     ".git",
     ".venv",
@@ -103,6 +116,12 @@ def collect_files(root: Path) -> list[tuple[Path, PurePosixPath]]:
     return [(root.joinpath(*relative.parts), relative) for relative in sorted(selected)]
 
 
+def _check_setup_files(paths: set[str]) -> None:
+    missing = sorted(REQUIRED_SETUP_FILES - paths)
+    if missing:
+        raise ValueError("Missing required setup files: " + ", ".join(missing))
+
+
 def verify_archive(archive_path: Path, expected_paths: set[str]) -> None:
     """Check the archive listing, path safety, CRCs, and Python syntax."""
     with zipfile.ZipFile(archive_path, "r") as archive:
@@ -121,7 +140,9 @@ def verify_archive(archive_path: Path, expected_paths: set[str]) -> None:
                 or _is_private_or_generated(relative)
             ):
                 raise ValueError("The source bundle contains a private or unsafe path")
-        if set(names) != expected_paths:
+        archive_paths = set(names)
+        _check_setup_files(archive_paths)
+        if archive_paths != expected_paths:
             raise ValueError("The source bundle listing differs from the allowlist")
         if archive.testzip() is not None:
             raise ValueError("The source bundle failed its CRC check")
@@ -134,8 +155,8 @@ def verify_archive(archive_path: Path, expected_paths: set[str]) -> None:
 def build_bundle(root: Path, output_path: Path | None = None) -> tuple[Path, str]:
     root = root.resolve(strict=True)
     files = collect_files(root)
-    if not files:
-        raise ValueError("No allowlisted source files were found")
+    expected_paths = {relative.as_posix() for _source, relative in files}
+    _check_setup_files(expected_paths)
     output_path = output_path or root / "dist" / "SHU_personal_source.zip"
     output_path = output_path.resolve()
     try:
@@ -149,7 +170,6 @@ def build_bundle(root: Path, output_path: Path | None = None) -> tuple[Path, str
         raise FileExistsError("Refusing to overwrite an existing personal bundle")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    expected_paths = {relative.as_posix() for _source, relative in files}
     output_created = False
     checksum_created = False
     try:

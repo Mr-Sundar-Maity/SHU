@@ -381,6 +381,48 @@ def test_mouse_click_skips_already_satisfied_state(monkeypatch, tmp_path):
     assert result["postcondition_verified"] is True
 
 
+def test_mouse_click_dispatches_once_to_turn_indeterminate_checkbox_off(monkeypatch, tmp_path):
+    checkbox = FakeControl("Remember", control_type="CheckBox")
+    checkbox.get_toggle_state = Mock(side_effect=[2, 0])
+    automation = automation_for(monkeypatch, [FakeWindow("Editor", [checkbox])], tmp_path)
+
+    result = automation.click_visible_control(
+        "Editor", "Remember", "unchecked", approved=True
+    )
+
+    assert checkbox.click_count == 1
+    assert result["already_satisfied"] is False
+    assert result["postcondition_verified"] is True
+
+
+@pytest.mark.parametrize("state_after_click", [2, 3])
+def test_mouse_click_cannot_verify_mixed_or_unknown_state_as_unchecked(
+    monkeypatch, tmp_path, state_after_click
+):
+    checkbox = FakeControl("Remember", control_type="CheckBox")
+    checkbox.get_toggle_state = Mock(side_effect=[1, state_after_click])
+    automation = automation_for(monkeypatch, [FakeWindow("Editor", [checkbox])], tmp_path)
+    monkeypatch.setattr("app.automation.windows._CLICK_VERIFY_TIMEOUT_SECONDS", 0)
+
+    result = automation.click_visible_control(
+        "Editor", "Remember", "unchecked", approved=True
+    )
+
+    assert checkbox.click_count == 1
+    assert result["postcondition_verified"] is False
+
+
+def test_mouse_click_rejects_invalid_toggle_state_before_dispatch(monkeypatch, tmp_path):
+    checkbox = FakeControl("Remember", control_type="CheckBox")
+    checkbox.get_toggle_state = Mock(return_value=3)
+    automation = automation_for(monkeypatch, [FakeWindow("Editor", [checkbox])], tmp_path)
+
+    with pytest.raises(PermissionError, match="cannot verify the CheckBox toggle state"):
+        automation.click_visible_control("Editor", "Remember", "unchecked", approved=True)
+
+    assert checkbox.click_count == 0
+
+
 def test_task_runner_does_not_retry_click_after_unverified_dispatch(monkeypatch, tmp_path):
     button = FakeControl("Save", control_type="Button")
     automation = automation_for(monkeypatch, [FakeWindow("Editor", [button])], tmp_path)

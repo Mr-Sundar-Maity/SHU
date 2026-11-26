@@ -3,10 +3,9 @@
 SHU is a local-first Windows voice assistant. The repository contains the
 voice and AI path plus the v1 foundations for approved memory, task execution,
 desktop tools, isolated public-page reading and form preparation, Office file generation, reminders,
-communications drafts, and a PySide6 dashboard. Review the [delivery status](docs/STATUS.md)
-for hardware and account prerequisites, the [PRD traceability](docs/PRD_TRACEABILITY.md)
-for acceptance evidence across the 19 phases, and the [progress checkpoint](docs/PROJECT_PROGRESS.md)
-to resume development.
+communications drafts, and a PySide6 dashboard. The project tracks hardware and
+account prerequisites, acceptance evidence across all 19 phases, and the point
+where development should resume. [Delivery status](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/STATUS.md) · [PRD traceability](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/PRD_TRACEABILITY.md) · [Progress checkpoint](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/PROJECT_PROGRESS.md)
 
 ## Requirements
 
@@ -115,7 +114,10 @@ In CLI text chat, enter `/reset` (or `/clear`) to discard the recent
 conversation context and start fresh; approved saved memories are not deleted.
 The dashboard's **Reset conversation** button clears the same temporary context
 and the visible transcript. Both controls are unavailable while a chat request
-or voice session is active.
+or voice session is active. When the 20-turn recent window fills, older turns
+are folded into a short bounded summary that is sent as reference data, not as
+instructions, so long conversations keep context without replaying the full
+transcript.
 
 The dashboard's **Ready** state is idle: it does not capture microphone audio or
 run wake-word inference in the background. Audio and the optional custom wake
@@ -123,6 +125,14 @@ listener start only after you choose **Start listening**; stopping the session
 returns SHU to Ready. The **Voice activity** line distinguishes recording,
 transcription, AI processing and speech output. It also shows microphone mute
 and whether voice interruptions are enabled during speech output.
+
+In Settings, **Detect spoken language automatically** enables language detection
+for the next voice session. It is off by default and lasts only for the current
+app session. When it is off, recognition uses **Default voice language**.
+Greetings and clarification prompts start in that default language. During a
+session, **Voice language** shows the selected or recognized language, or waits
+for detection when recognition is uncertain. Greetings and repeat prompts also
+appear in the transcript if speech output is unavailable.
 
 To evaluate a trained local wake-word model offline, prepare consented mono
 16 kHz PCM-16 WAV recordings. Put a JSON manifest next to the recordings with
@@ -389,8 +399,8 @@ python -m app.cli db restore --from C:\SHU_DATA\memory\backups\shu-backup.db --c
 
 `doctor` prints `PASS`, `WARN`, or `FAIL`. Warnings call out optional features
 that need an account, trained model, or user-specific choice; a `FAIL` means a
-core setup check is broken. Review `docs/STATUS.md` before relying on an
-integration whose status is partial.
+core setup check is broken. The delivery status linked above lists the live
+checks still pending for each integration.
 
 ## Privacy and permissions
 
@@ -587,7 +597,7 @@ python scripts\redteam_task_planner.py
 ```
 
 This probe uses only the configured local Qwen model. It drafts plans but never
-saves a task or executes a tool; the ten synthetic cases provide a repeatable
+saves a task or executes a tool; the synthetic cases provide a repeatable
 check, not a complete security proof.
 
 `--channel` accepts `chromium` (the Playwright-installed browser), `chrome`,

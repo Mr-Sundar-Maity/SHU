@@ -231,10 +231,13 @@ class WindowsAutomation:
             if not callable(state_getter):
                 raise PermissionError("SHU cannot read the CheckBox toggle state")
             try:
-                is_checked = int(state_getter()) == 1
+                toggle_state = state_getter()
             except Exception as error:
                 raise PermissionError("SHU cannot verify the CheckBox toggle state") from error
-            return is_checked if expected_state == "checked" else not is_checked
+            if type(toggle_state) is not int or toggle_state not in (0, 1, 2):
+                raise PermissionError("SHU cannot verify the CheckBox toggle state")
+            # UI Automation's Indeterminate state (2) satisfies neither condition.
+            return toggle_state == (1 if expected_state == "checked" else 0)
         selected_getter = getattr(control, "is_selected", None)
         if not callable(selected_getter):
             raise PermissionError("SHU cannot read the selection state")

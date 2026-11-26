@@ -38,6 +38,90 @@ def test_overdue_reminder_requires_explicit_recovery_decision(tmp_path):
     service.shutdown()
 
 
+@pytest.mark.parametrize("still_relevant", [False, True])
+def test_overdue_review_rejects_a_new_due_time(tmp_path, monkeypatch, still_relevant):
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    service = ReminderService(database)
+    other = ReminderService(Database(database.path))
+    reminder_id = service.create("Reviewed", datetime.now(timezone.utc) - timedelta(days=1))
+    service.scheduler.start(paused=True)
+    try:
+        reviewed, = service.start()
+        other.snooze(reminder_id, 10)
+        new_due_at = other.list_pending()[0]["due_at"]
+
+        class AfterSnooze(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return super().now(tz) + timedelta(minutes=11)
+
+        # The modal can stay open until the snoozed occurrence is also overdue.
+        monkeypatch.setattr("app.notifications.reminders.datetime", AfterSnooze)
+        with pytest.raises(ValueError, match="schedule changed"):
+            service.confirm_overdue(
+                reminder_id, still_relevant=still_relevant, expected_due_at=reviewed["due_at"],
+            )
+        assert service.list_pending()[0]["due_at"] == new_due_at
+        assert service.scheduler.get_jobs() == []
+    finally:
+        service.shutdown()
+
+
+def test_overdue_decision_cannot_dismiss_an_inflight_delivery(tmp_path):
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    other = ReminderService(Database(database.path))
+    reminder_id = other.create("Reviewed", datetime.now(timezone.utc) - timedelta(days=1))
+    reviewed, = other.list_pending()
+    attempts = []
+
+    def notify(*_args):
+        attempts.append(reminder_id)
+        with pytest.raises(ValueError, match="already has a delivery attempt"):
+            other.confirm_overdue(reminder_id, still_relevant=False, expected_due_at=reviewed["due_at"])
+        return "displayed"
+
+    service = ReminderService(database, notifier=notify)
+    service._deliver(reminder_id, reviewed["due_at"])
+    assert attempts == [reminder_id]
+    with database.connect() as connection:
+        status, result = connection.execute(
+            "SELECT status,result FROM reminders WHERE reminder_id=?", (reminder_id,),
+        ).fetchone()
+    assert (status, result) == ("delivered", "displayed")
+
+
+def test_late_overdue_recovery_job_preserves_a_new_snooze(tmp_path, monkeypatch):
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    calls = []
+    service = ReminderService(database, notifier=lambda *args: calls.append(args))
+    reminder_id = service.create("Reviewed", datetime.now(timezone.utc) - timedelta(days=1))
+    service.scheduler.start(paused=True)
+    try:
+        reviewed, = service.start()
+        original_add_job = service.scheduler.add_job
+
+        def add_after_snooze(*args, **kwargs):
+            monkeypatch.setattr(service.scheduler, "add_job", original_add_job)
+            service.snooze(reminder_id, 10)
+            return original_add_job(*args, **kwargs)
+
+        monkeypatch.setattr(service.scheduler, "add_job", add_after_snooze)
+        service.confirm_overdue(reminder_id, still_relevant=True, expected_due_at=reviewed["due_at"])
+        jobs = service.scheduler.get_jobs()
+        assert len(jobs) == 2
+        recovery_job, = (job for job in jobs if job.id != reminder_id)
+        recovery_job.func(*recovery_job.args)
+        assert not calls
+        new_due_at = service.list_pending()[0]["due_at"]
+        assert new_due_at != reviewed["due_at"]
+        assert service.scheduler.get_job(reminder_id).next_run_time == datetime.fromisoformat(new_due_at)
+    finally:
+        service.shutdown()
+
+
 @pytest.mark.parametrize(("recurrence", "days_back"), [("daily", 2), ("weekly", 14)])
 def test_recurring_reminders_resume_at_the_next_future_occurrence_after_restart(
     tmp_path, recurrence, days_back

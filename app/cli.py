@@ -1252,6 +1252,7 @@ def memory_retention(memory_id: str, until: str | None, *, clear: bool, confirme
             current.content,
             approved=True,
             retention_until=None if clear else until,
+            expected_record=current,
         )
     except Exception as error:
         print("Retention was not changed:", str(error))
@@ -1346,7 +1347,7 @@ def text_chat(provider: str | None = None) -> int:
             provider=provider,
             context=context,
             sensitive=is_sensitive_text(question) or bool(memory_context),
-            system_instruction=(
+            system_instruction=history.system_instruction(
                 response_style_instruction(settings.response_style)
                 + " Reply concisely in the language used by the user. "
                 "Do not claim actions were completed unless a verified tool result exists. "

@@ -109,6 +109,8 @@ class SHUVoiceAssistant:
         language: str | None = None,
         dynamic_recording: bool = True,
         on_activity: Callable[[str], None] | None = None,
+        on_language: Callable[[str | None], None] | None = None,
+        on_prompt: Callable[[str], None] | None = None,
     ) -> None:
         """Start a conversation; set max_turns for bounded runs and tests."""
         if max_turns is not None and max_turns < 1:
@@ -120,7 +122,11 @@ class SHUVoiceAssistant:
             if on_activity is not None and not self._stop_event.is_set():
                 on_activity(activity)
 
-        def speak(text: str):
+        def speak(text: str, *, prompt: bool = True):
+            if prompt and not self._stop_event.is_set():
+                print("\nSHU:", text)
+                if on_prompt is not None:
+                    on_prompt(text)
             report("speech_output")
             return self._speak(text)
 
@@ -201,12 +207,16 @@ class SHUVoiceAssistant:
             ):
                 language_code = detected_language
             else:
+                if on_language is not None:
+                    on_language(None)
                 self._pending_audio = speak(
                     REPEAT_PROMPTS.get(language_code, REPEAT_PROMPTS["en"])
                 )
                 continue
 
             self.tts.set_language(language_code)
+            if on_language is not None:
+                on_language(language_code)
             print("\nYou:", question)
             if question.casefold().strip(" .!?।") in _STOP_PHRASES:
                 speak(GOODBYES.get(language_code, GOODBYES["en"]))
@@ -230,7 +240,7 @@ class SHUVoiceAssistant:
                     provider=self.settings.ai_provider,
                     context=context,
                     sensitive=is_sensitive_text(question) or bool(memory_context),
-                    system_instruction=(
+                    system_instruction=self.history.system_instruction(
                         response_style_instruction(self.settings.response_style)
                         + " Respond naturally and concisely in the user's language "
                         f"(Whisper language code: {language_code}). Do not claim "
@@ -251,10 +261,12 @@ class SHUVoiceAssistant:
             self.history.add("assistant", response)
             if self.on_turn:
                 self.on_turn(question, response)
-            self._pending_audio = speak(response)
+            self._pending_audio = speak(response, prompt=False)
             completed_turns += 1
 
     def _speak(self, text: str):
+        if self._stop_event.is_set():
+            return None
         if not self.tts.speak(text):
             print("SHU: Voice output is unavailable; the text is shown above.")
         take_interrupted_audio = getattr(self.tts, "take_interrupted_audio", None)

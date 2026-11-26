@@ -785,28 +785,54 @@ class ReminderService:
                         continue
         return overdue
 
-    def confirm_overdue(self, reminder_id: str, *, still_relevant: bool) -> None:
-        """Resume or dismiss an overdue item after an explicit user decision."""
-        with self.database.connect() as connection:
+    def confirm_overdue(
+        self, reminder_id: str, *, still_relevant: bool, expected_due_at: str | None = None,
+    ) -> None:
+        """Apply an overdue decision to the occurrence the user reviewed."""
+        with self.database.connect() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT status, recurrence FROM reminders WHERE reminder_id=?",
+                "SELECT status, recurrence, due_at FROM reminders WHERE reminder_id=?",
                 (reminder_id,),
             ).fetchone()
             if row is None:
                 raise KeyError("Reminder not found")
             if row["status"] != "pending":
                 raise ValueError("Only pending reminders can be recovered")
-            if still_relevant:
-                self._schedule(
-                    reminder_id,
-                    run_now=row["recurrence"] not in {"daily", "weekly"},
+            due_at = row["due_at"]
+            due = datetime.fromisoformat(due_at)
+            if due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+            if expected_due_at is not None and due_at != expected_due_at:
+                raise ValueError("The reviewed reminder schedule changed")
+            if due > datetime.now(timezone.utc):
+                raise ValueError("The reminder is scheduled for a future time")
+            recurring = row["recurrence"] in {"daily", "weekly"}
+            if not recurring and connection.execute(
+                "SELECT 1 FROM audit_logs WHERE log_id=?", (_delivery_claim_id(reminder_id, due),)
+            ).fetchone():
+                raise ValueError("This reminder occurrence already has a delivery attempt")
+            if not still_relevant:
+                connection.execute(
+                    "UPDATE reminders SET status='dismissed', result='overdue_dismissed' WHERE reminder_id=?",
+                    (reminder_id,),
                 )
-            else:
-                with connection:
-                    connection.execute(
-                        "UPDATE reminders SET status='dismissed', result='overdue_dismissed' WHERE reminder_id=?",
-                        (reminder_id,),
-                    )
+                return
+
+        if recurring:
+            self._schedule(reminder_id)
+        else:
+            # This recovery job carries the reviewed occurrence. A concurrent
+            # snooze owns a separate scheduler job and a new database due time.
+            self.scheduler.add_job(
+                self._deliver,
+                trigger=DateTrigger(run_date=datetime.now(timezone.utc)),
+                args=[reminder_id, due_at],
+                id=_delivery_claim_id(reminder_id, due),
+                replace_existing=True,
+                coalesce=True,
+                misfire_grace_time=24 * 60 * 60,
+            )
 
     def snooze(self, reminder_id: str, minutes: int = 10) -> None:
         if not 1 <= minutes <= 24 * 60:
@@ -856,7 +882,7 @@ class ReminderService:
         except Exception:
             pass
 
-    def _schedule(self, reminder_id: str, *, run_now: bool = False) -> None:
+    def _schedule(self, reminder_id: str) -> None:
         with self.database.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM reminders WHERE reminder_id=? AND status='pending'",
@@ -865,9 +891,7 @@ class ReminderService:
         if row is None:
             raise KeyError("Pending reminder not found")
 
-        if run_now:
-            trigger = DateTrigger(run_date=datetime.now(timezone.utc))
-        elif row["recurrence"] in {"daily", "weekly"}:
+        if row["recurrence"] in {"daily", "weekly"}:
             zone = self._zone(row["timezone"])
             first = datetime.fromisoformat(row["due_at"])
             if first.tzinfo is None:

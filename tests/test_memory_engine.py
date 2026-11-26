@@ -42,6 +42,90 @@ def test_memory_requires_approval_and_preserves_audit(manager):
     assert manager.list_memories() == []
 
 
+@pytest.mark.parametrize("operation", ["update", "delete"])
+def test_memory_confirmation_rejects_a_changed_snapshot(manager, monkeypatch, operation):
+    monkeypatch.setattr(memory_manager, "_now", lambda: "2026-11-26T08:00:00.000000+00:00")
+    reviewed = manager.add_memory("Reviewed garden note", approved=True)
+    other = MemoryManager(Database(manager.database.path))
+    revised = other.update_memory(
+        reviewed.memory_id, "Concurrent correction", confidence=0.0, approved=True,
+    )
+    assert revised.updated_at == reviewed.updated_at
+
+    with pytest.raises(ValueError, match="changed since review"):
+        if operation == "update":
+            manager.update_memory(
+                reviewed.memory_id, "Correction from old review", approved=True,
+                expected_record=reviewed,
+            )
+        else:
+            manager.delete_memory(reviewed.memory_id, approved=True, expected_record=reviewed)
+
+    assert manager.get_memory(reviewed.memory_id) == revised
+    with manager.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("operation", ["update", "delete"])
+@pytest.mark.parametrize("snapshot", [None, False])
+def test_explicit_missing_memory_snapshot_cannot_disable_review(manager, operation, snapshot):
+    original = manager.add_memory("Original garden note", approved=True)
+    with pytest.raises(ValueError, match="changed since review"):
+        if operation == "update":
+            manager.update_memory(
+                original.memory_id, "Changed note", approved=True, expected_record=snapshot,
+            )
+        else:
+            manager.delete_memory(original.memory_id, approved=True, expected_record=snapshot)
+    assert manager.get_memory(original.memory_id) == original
+    with manager.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0] == 1
+
+
+def test_reviewed_memory_can_be_corrected_and_deleted(manager):
+    original = manager.add_memory("Original garden note", approved=True)
+    revised = manager.update_memory(
+        original.memory_id, "Corrected garden note", approved=True, expected_record=original,
+    )
+    assert revised.content == "Corrected garden note"
+    assert manager.delete_memory(revised.memory_id, approved=True, expected_record=revised)
+    with pytest.raises(ValueError, match="changed since review"):
+        manager.delete_memory(revised.memory_id, approved=True, expected_record=revised)
+    assert manager.delete_memory(revised.memory_id, approved=True) is False
+    with manager.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0] == 3
+
+
+def test_memory_delete_checks_the_reviewed_record_under_write_lock(manager, monkeypatch):
+    reviewed = manager.add_memory("Reviewed garden note", approved=True)
+    connect = manager.database.connect
+    writes = []
+
+    def attempt_concurrent_correction(statement):
+        if "SELECT * FROM memories WHERE memory_id=" not in statement:
+            return
+        with closing(sqlite3.connect(manager.database.path, timeout=0)) as competitor:
+            try:
+                competitor.execute(
+                    "UPDATE memories SET content='Concurrent correction' WHERE memory_id=?",
+                    (reviewed.memory_id,),
+                )
+            except sqlite3.OperationalError as error:
+                writes.append(str(error))
+            else:
+                writes.append("unexpected success")
+
+    @contextmanager
+    def trace_review_read():
+        with connect() as connection:
+            connection.set_trace_callback(attempt_concurrent_correction)
+            yield connection
+
+    monkeypatch.setattr(manager.database, "connect", trace_review_read)
+    assert manager.delete_memory(reviewed.memory_id, approved=True, expected_record=reviewed)
+    assert writes == ["database is locked"]
+
+
 def test_memory_retrieval_includes_only_relevant_approved_records(manager):
     relevant = manager.add_memory(
         "The preferred response language is Bengali",
@@ -145,6 +229,39 @@ def test_memory_rejects_authentication_secrets(manager):
         manager.add_memory("password: dont-store-this", approved=True)
     with pytest.raises(MemoryValidationError, match="Authentication secrets"):
         manager.add_memory("My password is private", approved=True)
+
+
+def test_memory_export_collision_preserves_completed_file(manager, monkeypatch):
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 26, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(memory_manager, "datetime", FixedClock)
+    output = manager.export_approved_memories(approved=True)
+    saved = output.read_bytes()
+    manager.add_memory("Prefer short replies", approved=True)
+
+    with pytest.raises(FileExistsError):
+        manager.export_approved_memories(approved=True)
+
+    assert output.read_bytes() == saved
+    assert list(output.parent.iterdir()) == [output]
+
+
+def test_failed_memory_export_never_publishes_partial_json(manager, monkeypatch):
+    export_dir = manager.database.path.parent / "exports"
+
+    def interrupted(_payload, stream, **_kwargs):
+        stream.write('{"memories":')
+        stream.flush()
+        assert not list(export_dir.glob("*.json"))
+        raise OSError("Interrupted export")
+
+    monkeypatch.setattr(memory_manager.json, "dump", interrupted)
+    with pytest.raises(OSError, match="Interrupted export"):
+        manager.export_approved_memories(approved=True)
+    assert not list(export_dir.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -440,6 +557,28 @@ def test_memory_review_flags_duplicates_and_possible_conflicts_without_writing(m
     with manager.database.connect() as connection:
         after = connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
     assert after == before
+
+
+@pytest.mark.parametrize(
+    ("positive", "negative", "unrelated"),
+    [
+        ("আমার কফি পছন্দ", "আমার কফি পছন্দ না", "আমার দুধ পছন্দ"),
+        ("मुझे चाय पसंद", "मुझे चाय पसंद नहीं", "दूध पसंद"),
+        ("காபி விருப்பம்", "காபி விருப்பம் இல்லை", "பால் விருப்பம்"),
+        ("కాఫీ ఇష్టం", "కాఫీ ఇష్టం లేదు", "పాలు ఇష్టం"),
+        ("കാപ്പി ഇഷ്ടം", "കാപ്പി ഇഷ്ടം അല്ല", "പാൽ ഇഷ്ടം"),
+        ("I prefer tea", "I don’t prefer tea", "I prefer milk"),
+    ],
+)
+def test_memory_review_uses_whole_words_for_preferences(manager, positive, negative, unrelated):
+    for content in (positive, negative, unrelated):
+        manager.add_memory(content, memory_type="preference", approved=True)
+
+    pairs = {
+        (candidate.kind, frozenset((candidate.first.content, candidate.second.content)))
+        for candidate in manager.review_candidates()
+    }
+    assert pairs == {("possible_conflict", frozenset((positive, negative)))}
 
 
 def test_deleting_memory_removes_linked_derived_episodic_record(manager):

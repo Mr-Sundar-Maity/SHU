@@ -364,6 +364,28 @@ def test_voice_assistant_does_not_speak_a_response_after_emergency_stop(interrup
     assert assistant.history.recent() == []
 
 
+@pytest.mark.parametrize("callback_name", ["on_prompt", "on_activity"])
+def test_voice_stop_from_prompt_callback_skips_speech_and_recording(tmp_path, callback_name):
+    settings = Settings.from_env({
+        "SHU_DATA_DIR": str(tmp_path),
+        "SHU_DEFAULT_LANGUAGE": "en",
+        "SHU_MICROPHONE_DEVICE": "",
+    })
+    stt = Mock()
+    tts = Mock()
+    assistant = SHUVoiceAssistant(settings=settings, stt=stt, tts=tts, ai=Mock())
+
+    def stop_before_speech(_value):
+        assistant.request_stop()
+
+    assistant.start(max_turns=1, **{callback_name: stop_before_speech})
+
+    tts.stop.assert_called_once_with()
+    tts.speak.assert_not_called()
+    stt.listen_and_transcribe.assert_not_called()
+    assert assistant.history.recent() == []
+
+
 def test_voice_assistant_reprompts_on_unsupported_low_confidence_language():
     class FakeSTT:
         def __init__(self):
