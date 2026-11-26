@@ -7,6 +7,11 @@ communications drafts, and a PySide6 dashboard. The project tracks hardware and
 account prerequisites, acceptance evidence across all 19 phases, and the point
 where development should resume. [Delivery status](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/STATUS.md) · [PRD traceability](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/PRD_TRACEABILITY.md) · [Progress checkpoint](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/PROJECT_PROGRESS.md)
 
+Original planning references: [Master PRD v1.0](https://github.com/Mr-Sundar-Maity/SHU/blob/main/SHU_Master_PRD_Detailed_v1.pdf)
+and [Technology and installation guide](https://github.com/Mr-Sundar-Maity/SHU/blob/main/SHU_Complete_Technology_and_Installation_Guide_v1.pdf).
+Their prototype/install status is historical; use the dated progress checkpoint
+for the verified implementation and current prerequisites.
+
 ## Requirements
 
 - Windows 10/11 and Python 3.11 (the PowerShell setup script creates `.venv`)

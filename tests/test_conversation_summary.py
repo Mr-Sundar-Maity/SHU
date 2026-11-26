@@ -43,6 +43,16 @@ def test_summary_skips_tool_and_system_turns():
     assert "internal" not in history.summary()
 
 
+@pytest.mark.parametrize("budget", [14, 28, 900])
+def test_summary_budget_counts_newline_separators(budget):
+    history = ShortTermMemory(max_turns=1, summary_chars=budget)
+    for _ in range(140):
+        history.add("user", "a")
+        assert len(history.summary()) <= budget
+
+    assert history.summary()
+
+
 def test_summary_collapses_whitespace_and_truncates_long_turns():
     history = ShortTermMemory(max_turns=1)
     history.add("assistant", "line one\nline two\t" + "x" * 200)

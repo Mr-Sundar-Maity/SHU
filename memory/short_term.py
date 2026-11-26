@@ -78,5 +78,7 @@ class ShortTermMemory:
             line = line[: _MAX_SUMMARY_LINE_CHARS - 1].rstrip() + "\u2026"
         label = "User" if turn.role == "user" else "SHU"
         self._summary.append(f"{label}: {line}")
-        while self._summary and sum(map(len, self._summary)) > self._summary_chars:
+        while self._summary and (
+            sum(map(len, self._summary)) + len(self._summary) - 1 > self._summary_chars
+        ):
             self._summary.popleft()
