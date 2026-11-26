@@ -37,9 +37,11 @@ wake-word model. See the checkpoint for publication and exact-commit CI evidence
 
 See [PRD_TRACEABILITY.md](PRD_TRACEABILITY.md) for requirement-level evidence and the exact remaining acceptance work.
 
-GitHub blocked the r11 Windows CI check for `e3addba` before starting its job
-due to an account billing restriction. Hosted setup and tests remain pending.
-[r11 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45734146460/job/139623179128)
+GitHub `main` received the pending r14 and current r15 source at `8ff7c66`.
+GitHub blocked its Windows CI check before runner assignment due to an account
+billing lock (zero job steps). Hosted setup and tests remain pending; the local
+checkout and fresh-environment tests passed. No billing setting was changed.
+[r15 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45895332387/job/140167692878)
 
 ## Machine checks
 

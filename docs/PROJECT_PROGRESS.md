@@ -21,7 +21,7 @@ WhatsApp access token and trained `Hey SHU` model. Gmail OAuth passed a fresh
 read-only verification. Direct Gemini generation still returned HTTP 503 after
 75.078 seconds with its bounded retry policy; cloud generation is not accepted.
 
-## Current checkpoint on 2026-11-27 (r15, verified locally)
+## Current checkpoint on 2026-11-27 (r15, published)
 
 - Read the current README and checkpoint before continuing. The authoritative
   worktree had already advanced to local commit `044d919`; the previous r13
@@ -52,8 +52,15 @@ read-only verification. Direct Gemini generation still returned HTTP 503 after
   contain Content Credentials provenance attachments, no document open actions,
   and no recognized credential patterns in extracted text.
 - Existing `.env`, private databases, credentials, model caches and older source
-  bundles are preserved and excluded from Git. Publication and exact-commit
-  hosted CI inspection are the next steps; clean-environment verification is done.
+  bundles are preserved and excluded from Git. GitHub `main` received both the
+  pending r14 commit and r15 source commit `8ff7c665fc0b5d27e0723afbfd3e52219d96ad8c`;
+  the remote SHA was read back successfully and the worktree was clean.
+- The exact r15 hosted Windows check completed with failure before runner
+  assignment. GitHub's annotation says the account is locked due to a billing
+  issue; the job has an empty runner name and zero steps. This is not a hosted
+  test result. Public API rate limiting was resolved for inspection using the
+  existing Git Credential Manager authentication without exposing its value.
+  [r15 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45895332387/job/140167692878)
 
 ## Earlier work on 2026-11-26 (r14, verified and packaged)
 
@@ -666,11 +673,13 @@ read-only verification. Direct Gemini generation still returned HTTP 503 after
 
 ## Resume point
 
-On resume, inspect the r15 checkpoint and current Git status, then fetch
-`origin/main`. If publication is still pending, commit and push the verified
-source, supplied planning PDFs and updated progress documents; confirm the
-published SHA and its hosted CI result. Continue with the remaining acceptance
-items in the phase rows. Rerun Windows CI if GitHub restores runner access.
+On resume, read this r15 checkpoint, inspect Git status and fetch `origin/main`.
+Publication of r14/r15 is complete through source commit `8ff7c66`; the later
+documentation-only commit records its CI result. Do not restart those changes
+or repeat unchanged test suites just to recreate evidence. Continue with the
+remaining acceptance items in the phase rows. Hosted CI cannot start until the
+owner resolves the GitHub account billing lock; no billing setting was changed.
+Rerun the existing Windows workflow after runner access is restored.
 Live checks still
 need owner audio and consented six-language speech, the custom wake model,
 WhatsApp setup and recipient consent, reviewed Gmail actions and Outlook
