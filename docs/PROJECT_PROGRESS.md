@@ -20,6 +20,9 @@ token and missing trained `Hey SHU` model.
 
 - Continued from r10c at `0b13c21`. Existing SQLite records and local
   configuration were preserved. The selected model remains `qwen2.5:1.5b`.
+- GitHub `main` received source commit `e3addba`. GitHub Actions reported an
+  account billing restriction before assigning the Windows runner. Hosted setup
+  and test execution remain pending. [r11 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45734146460/job/139623179128)
 - Phases 4, 7 and 17. Voice stop and the dashboard Emergency Stop cancel
   waiting Ollama work through the shared inference queue. SHU drops the
   active request's late response and skips provider fallback after Stop. An

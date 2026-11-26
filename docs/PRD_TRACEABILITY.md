@@ -50,9 +50,9 @@ local Qwen fallback works. None of these checks closes the outstanding target-
 device, live-account, human-language-quality or physical-recovery acceptance
 items listed below.
 
-GitHub Actions created the r10c Windows CI check and recorded a failure before
-runner assignment. The check reports an account billing lock. Hosted clean
-installation and tests remain open. [r10c Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45732340908)
+GitHub Actions recorded a failure for the r11 Windows CI check on `e3addba`
+before runner assignment due to an account billing restriction. Hosted clean
+installation and tests remain open. [r11 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45734146460/job/139623179128)
 
 ## Next practical checkpoints
 
