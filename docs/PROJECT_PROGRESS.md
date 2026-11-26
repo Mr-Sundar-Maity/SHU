@@ -21,6 +21,8 @@ token and missing trained `Hey SHU` model.
 - Phase 18. Final `scripts\verify.ps1` passed 650 tests in 45.62 seconds,
   dependency and compile checks, SQLite integrity at schema v5 and Doctor.
   Doctor still warns about the missing WhatsApp token and trained wake model.
+- GitHub's Windows check for `e2c772d` stopped before runner startup due to an
+  account billing lock. [r10c Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45732340908)
 - Phases 5 and 18. Restore now opens the source once and validates the staged
   snapshot's SHU columns, integrity and foreign keys. It migrates and checks
   that same snapshot before preserving or replacing the live file. A competing

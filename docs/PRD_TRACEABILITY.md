@@ -50,9 +50,9 @@ local Qwen fallback works. None of these checks closes the outstanding target-
 device, live-account, human-language-quality or physical-recovery acceptance
 items listed below.
 
-GitHub Actions created the r9 Windows CI check and recorded a failure before
+GitHub Actions created the r10c Windows CI check and recorded a failure before
 runner assignment. The check reports an account billing lock. Hosted clean
-installation and tests remain open. [r9 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45729727797)
+installation and tests remain open. [r10c Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45732340908)
 
 ## Next practical checkpoints
 
