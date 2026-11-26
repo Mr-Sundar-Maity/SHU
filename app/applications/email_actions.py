@@ -7,7 +7,6 @@ import hmac
 import json
 import re
 import sqlite3
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import getaddresses
@@ -15,7 +14,11 @@ from typing import Any
 
 import httpx
 
-from app.applications.communications import ProviderNotConfigured
+from app.applications.communications import (
+    DeliveryOutcomeUnknown,
+    ProviderNotConfigured,
+    _confirmed_provider_id,
+)
 from database.database import Database
 
 
@@ -49,7 +52,7 @@ class EmailActionPreview:
 
 
 class EmailActionService:
-    """Prepare native provider reply/forward drafts with explicit review."""
+    """Prepare reviewed native replies and forwards and guard provider writes."""
 
     def __init__(self, database: Database, provider: Any) -> None:
         self.database = database
@@ -137,7 +140,7 @@ class EmailActionService:
             raise ProviderNotConfigured(
                 f"The configured email provider does not support {preview.action}"
             )
-        self._audit(preview, "approved", "provider_action_started", send=send)
+        log_id = self._claim(preview)
         try:
             if preview.action == "reply":
                 external_id = method(
@@ -162,31 +165,22 @@ class EmailActionService:
                     preview.subject,
                     preview.comment,
                 )
-            if not isinstance(external_id, str) or not external_id:
-                raise RuntimeError("Email provider returned no action identifier")
-        except (TimeoutError, httpx.TimeoutException) as error:
-            self._audit(preview, "approved", "unknown_after_timeout", send=send)
-            raise RuntimeError(
+            external_id = _confirmed_provider_id(external_id)
+        except (TimeoutError, httpx.TimeoutException):
+            self._record_result(log_id, "unknown_after_timeout")
+            raise DeliveryOutcomeUnknown(
                 "Email action status is unknown after timeout; inspect the provider before retrying"
-            ) from error
+            ) from None
         except ProviderNotConfigured:
-            self._audit(preview, "approved", "provider_not_configured", send=send)
-            raise
-        except Exception as error:
-            self._audit(
-                preview,
-                "approved",
-                "failed:" + type(error).__name__,
-                send=send,
-            )
-            raise
-        self._audit(
-            preview,
-            "approved",
-            "sent" if send else "provider_draft_created",
-            send=send,
-            external_id=external_id,
-        )
+            # The native adapters raise this before their first provider write.
+            self._record_result(log_id, "provider_not_configured")
+            raise ProviderNotConfigured("The configured email provider is unavailable") from None
+        except Exception:
+            self._record_result(log_id, "unknown")
+            raise DeliveryOutcomeUnknown(
+                "Email action status is unknown; inspect the provider before retrying"
+            ) from None
+        self._record_result(log_id, "sent" if send else "provider_draft_created")
         return external_id
 
     def _read_source(
@@ -272,35 +266,56 @@ class EmailActionService:
             json.dumps(canonical, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
 
-    def _audit(
-        self,
-        preview: EmailActionPreview,
-        approval: str,
-        result: str,
-        *,
-        send: bool,
-        external_id: str = "",
-    ) -> None:
-        summary = (
+    def _claim(self, preview: EmailActionPreview) -> str:
+        digest = preview.digest
+        log_id = "email-action:" + digest
+        tool = "email_" + preview.action
+        mode = "send" if preview.send else "provider_draft"
+        summary = f"action={preview.action}; digest={digest}; mode={mode}"
+        previous_summary = (
             f"action={preview.action}; source={preview.source_message_id}; "
-            f"recipient={preview.recipient}; digest={preview.digest}; "
-            f"mode={'send' if send else 'provider_draft'}"
+            f"recipient={preview.recipient}; digest={digest}; mode={mode}"
         )
-        if external_id:
-            summary += "; external_id=" + external_id[:300]
-        with self.database.connect() as connection:
-            with connection:
-                connection.execute(
-                    """INSERT INTO audit_logs(log_id,actor,tool,action_summary,risk,approval,result,timestamp)
-                    VALUES(?,?,?,?,?,?,?,?)""",
-                    (
-                        str(uuid.uuid4()),
-                        "email_action_service",
-                        "email_" + preview.action,
-                        summary,
-                        "L3",
-                        approval,
-                        result,
-                        datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    ),
+        with self.database.connect() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            attempt = connection.execute(
+                "SELECT result FROM audit_logs WHERE log_id=?", (log_id,)
+            ).fetchone()
+            if attempt is None:
+                # Older attempts used one row for dispatch and one for its result.
+                # A preflight failure cancels one dispatch. Other outcomes block replay.
+                external_prefix = previous_summary + "; external_id="
+                completed, unresolved = connection.execute(
+                    """SELECT MAX(result IN ('sent', 'provider_draft_created')),
+                              SUM(CASE result WHEN 'provider_not_configured' THEN -1 ELSE 1 END)
+                       FROM audit_logs WHERE actor='email_action_service' AND tool=? AND
+                           (action_summary=? OR substr(action_summary, 1, ?) = ?)""",
+                    (tool, previous_summary, len(external_prefix), external_prefix),
+                ).fetchone()
+            else:
+                completed = attempt["result"] in {"sent", "provider_draft_created"}
+                unresolved = attempt["result"] != "provider_not_configured"
+            if completed:
+                raise ValueError("This reviewed email action has already completed. Check the provider.")
+            if unresolved:
+                raise DeliveryOutcomeUnknown(
+                    "This reviewed email action was already attempted; inspect the provider before retrying"
                 )
+            connection.execute(
+                """INSERT INTO audit_logs(log_id,actor,tool,action_summary,risk,approval,result,timestamp)
+                   VALUES(?,'email_action_service',?,?,'L3','approved','provider_action_started',?)
+                   ON CONFLICT(log_id) DO UPDATE SET result=excluded.result,timestamp=excluded.timestamp""",
+                (log_id, tool, summary, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            )
+        return log_id
+
+    def _record_result(self, log_id: str, result: str) -> None:
+        try:
+            with self.database.connect() as connection, connection:
+                connection.execute(
+                    "UPDATE audit_logs SET result=? WHERE log_id=?", (result, log_id)
+                )
+        except (sqlite3.Error, FileNotFoundError):
+            raise DeliveryOutcomeUnknown(
+                "Email action status could not be recorded; inspect the provider before retrying"
+            ) from None

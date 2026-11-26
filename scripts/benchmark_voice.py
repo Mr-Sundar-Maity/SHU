@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -123,12 +124,18 @@ class _LocalAI:
         context: Sequence[Mapping[str, str]],
         system_instruction: str,
         sensitive: bool,
+        cancel_event: Event | None = None,
     ) -> str:
         if provider != "ollama":
             raise ValueError("Voice benchmark permits only Ollama.")
         started = time.perf_counter()
         self.seconds = None
-        with CPU_WORK_QUEUE.slot(timeout=self.settings.request_timeout_seconds):
+        with CPU_WORK_QUEUE.slot(
+            timeout=self.settings.request_timeout_seconds,
+            cancel_event=cancel_event,
+        ):
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Voice benchmark request cancelled")
             response = self.session.post(
                 f"{self.settings.local_ai_base_url}/api/chat",
                 json={

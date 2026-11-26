@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from math import isfinite
+from threading import Event
 from typing import Any
 
 import requests
@@ -11,6 +12,11 @@ import requests
 from app.config import Settings, get_settings
 from app.cpu_work_queue import CPU_WORK_QUEUE
 from app.security.privacy import is_sensitive_text
+
+
+def _check_cancelled(cancel_event: Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError("AI request cancelled")
 
 
 class SHUAIEngine:
@@ -26,8 +32,10 @@ class SHUAIEngine:
         context: Sequence[Mapping[str, str]] = (),
         system_instruction: str | None = None,
         temperature: float | None = None,
+        cancel_event: Event | None = None,
     ) -> str:
         """Send a bounded conversation to the Ollama local chat endpoint."""
+        _check_cancelled(cancel_event)
         self._validate_temperature(temperature)
         messages = self._messages(
             prompt,
@@ -41,12 +49,17 @@ class SHUAIEngine:
         }
         if temperature is not None:
             payload["options"] = {"temperature": temperature}
-        with CPU_WORK_QUEUE.slot(timeout=self.settings.request_timeout_seconds):
+        with CPU_WORK_QUEUE.slot(
+            timeout=self.settings.request_timeout_seconds,
+            cancel_event=cancel_event,
+        ):
+            _check_cancelled(cancel_event)
             response = requests.post(
                 f"{self.settings.local_ai_base_url}/api/chat",
                 json=payload,
                 timeout=self.settings.request_timeout_seconds,
             )
+            _check_cancelled(cancel_event)
             response.raise_for_status()
             data: Any = response.json()
             try:
@@ -89,8 +102,10 @@ class SHUAIEngine:
         context: Sequence[Mapping[str, str]] = (),
         system_instruction: str | None = None,
         temperature: float | None = None,
+        cancel_event: Event | None = None,
     ) -> str:
         """Send a request to Gemini; import the provider SDK only when needed."""
+        _check_cancelled(cancel_event)
         self._validate_temperature(temperature)
         if not self.settings.cloud_ai_enabled:
             raise PermissionError("Cloud AI is disabled in SHU settings")
@@ -146,7 +161,9 @@ class SHUAIEngine:
         }
         if generation_config is not None:
             generation_arguments["config"] = generation_config
+        _check_cancelled(cancel_event)
         response = client.models.generate_content(**generation_arguments)
+        _check_cancelled(cancel_event)
         text = getattr(response, "text", None)
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Gemini returned an empty response")
@@ -162,8 +179,10 @@ class SHUAIEngine:
         system_instruction: str | None = None,
         on_status: Callable[[str], None] | None = None,
         temperature: float | None = None,
+        cancel_event: Event | None = None,
     ) -> str:
         """Generate a response, keeping sensitive requests local by default."""
+        _check_cancelled(cancel_event)
         self._validate_temperature(temperature)
         if not prompt or not prompt.strip():
             return "Please tell me something."
@@ -190,6 +209,21 @@ class SHUAIEngine:
         if privacy_routed_local:
             selected_provider = "ollama"
 
+        arguments: dict[str, Any] = {
+            "context": context,
+            "system_instruction": system_instruction,
+        }
+        if temperature is not None:
+            arguments["temperature"] = temperature
+        if cancel_event is not None:
+            arguments["cancel_event"] = cancel_event
+
+        def invoke(adapter: Callable[..., str], **overrides: Any) -> str:
+            _check_cancelled(cancel_event)
+            result = adapter(prompt, **(arguments | overrides))
+            _check_cancelled(cancel_event)
+            return result
+
         if selected_provider == "ollama":
             try:
                 if on_status:
@@ -214,14 +248,9 @@ class SHUAIEngine:
                         else "SHU: Using Local AI..."
                     )
                 )
-                local_arguments = {
-                    "context": context,
-                    "system_instruction": system_instruction,
-                }
-                if temperature is not None:
-                    local_arguments["temperature"] = temperature
-                return self.ask_local(prompt, **local_arguments)
+                return invoke(self.ask_local)
             except Exception as error:
+                _check_cancelled(cancel_event)
                 print("Local AI Error:", self._safe_error_label(error))
                 if self.settings.cloud_ai_enabled and self.settings.cloud_fallback and not (
                     sensitive_request and not self.settings.allow_cloud_personal_data
@@ -233,14 +262,9 @@ class SHUAIEngine:
                         )
                     print("SHU: Trying Cloud AI...")
                     try:
-                        google_arguments = {
-                            "context": context,
-                            "system_instruction": system_instruction,
-                        }
-                        if temperature is not None:
-                            google_arguments["temperature"] = temperature
-                        return self.ask_google(prompt, **google_arguments)
+                        return invoke(self.ask_google)
                     except Exception as cloud_error:
+                        _check_cancelled(cancel_event)
                         print("Cloud AI Error:", self._safe_error_label(cloud_error))
                 return "Sorry, I could not process your request."
 
@@ -251,14 +275,9 @@ class SHUAIEngine:
                     f"Generating with Google Gemini ({self.settings.gemini_model or 'configured model'})",
                 )
             print("SHU: Using Google Gemini...")
-            google_arguments = {
-                "context": context,
-                "system_instruction": system_instruction,
-            }
-            if temperature is not None:
-                google_arguments["temperature"] = temperature
-            return self.ask_google(prompt, **google_arguments)
+            return invoke(self.ask_google)
         except Exception as error:
+            _check_cancelled(cancel_event)
             print("Gemini Error:", self._safe_error_label(error))
             if self.settings.local_fallback:
                 if on_status:
@@ -268,13 +287,9 @@ class SHUAIEngine:
                     )
                 print("SHU: Trying Local AI fallback...")
                 try:
-                    return self.ask_local(
-                        prompt,
-                        context=context,
-                        system_instruction=system_instruction,
-                        temperature=temperature,
-                    )
+                    return invoke(self.ask_local, temperature=temperature)
                 except Exception as local_error:
+                    _check_cancelled(cancel_event)
                     print(
                         "Local AI fallback error:",
                         self._safe_error_label(local_error),

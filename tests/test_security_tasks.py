@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from app.security.emergency_stop import EmergencyStop
 from app.security.policy import PolicyDenied, RiskLevel
 from app.security.registry import ToolRegistry, ToolSpec
-from app.tasks.executor import TaskExecutor, _is_transient_tool_error
+from app.tasks.executor import TaskExecutor, _is_transient_tool_error, _probe_process
 from app.tasks.planner import InvalidPlan, TaskPlanner
 from database.database import Database
 
@@ -998,6 +998,93 @@ def test_reconciliation_does_not_mark_a_live_runner_as_orphaned(tmp_path):
         assert connection.execute(
             "SELECT status FROM tasks WHERE task_id=?", (task_id,)
         ).fetchone()[0] == "running"
+
+
+@pytest.mark.parametrize(
+    ("current_creation_ticks", "expected_status"),
+    [(100, "running"), (None, "running"), (200, "interrupted")],
+    ids=["same-runner", "identity-unavailable", "recycled-pid"],
+)
+def test_reconciliation_checks_runner_creation_time(
+    tmp_path, monkeypatch, current_creation_ticks, expected_status
+):
+    database, registry = make_registry(tmp_path)
+    planner = TaskPlanner(database, registry)
+    task_id = planner.create(
+        "read a value", [{"tool": "read_value", "arguments": {"key": "x"}}]
+    )
+    executor = TaskExecutor(database, planner, registry)
+    with monkeypatch.context() as patch:
+        patch.setattr("app.tasks.executor._probe_process", lambda _pid: (True, 100))
+        executor._claim_task(task_id, allowed_statuses=("planned",))
+        executor._mark_inflight(task_id, 1)
+
+    monkeypatch.setattr(
+        "app.tasks.executor._probe_process", lambda _pid: (True, current_creation_ticks)
+    )
+    recovered = executor.reconcile_orphaned_tasks()
+
+    with database.connect() as connection:
+        task = connection.execute(
+            "SELECT status,runner_pid,inflight_step FROM tasks WHERE task_id=?", (task_id,)
+        ).fetchone()
+        audit_rows = connection.execute(
+            "SELECT tool,action_summary FROM audit_logs WHERE task_id=? ORDER BY rowid", (task_id,)
+        ).fetchall()
+    assert json.loads(audit_rows[0]["action_summary"]) == {
+        "pid": os.getpid(), "creation_ticks": 100
+    }
+    if expected_status == "interrupted":
+        assert recovered == [{"task_id": task_id, "status": "interrupted", "uncertain_step": 1}]
+        assert tuple(task) == ("interrupted", None, 1)
+        assert [row["tool"] for row in audit_rows] == ["claim_task_runner", "reconcile_orphaned_task"]
+        with pytest.raises(PermissionError, match="explicit approval"):
+            executor.resolve_interrupted(task_id, action="retry")
+    else:
+        assert recovered == []
+        assert tuple(task) == ("running", os.getpid(), 1)
+        assert [row["tool"] for row in audit_rows] == ["claim_task_runner"]
+
+
+def test_reconciliation_skips_a_new_claim_after_reading_a_stale_claim(tmp_path, monkeypatch):
+    database, registry = make_registry(tmp_path)
+    planner = TaskPlanner(database, registry)
+    task_id = planner.create(
+        "read a value", [{"tool": "read_value", "arguments": {"key": "x"}}]
+    )
+    executor = TaskExecutor(database, planner, registry)
+    with monkeypatch.context() as patch:
+        patch.setattr("app.tasks.executor._probe_process", lambda _pid: (True, 100))
+        executor._claim_task(task_id, allowed_statuses=("planned",))
+
+    def probe_after_reclaim(pid):
+        assert pid == os.getpid()
+        # Another reconciler can classify a between-step crash and allow a new claim.
+        with database.connect() as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE tasks SET status='cancelled',runner_pid=NULL WHERE task_id=?", (task_id,)
+                )
+        with monkeypatch.context() as patch:
+            patch.setattr("app.tasks.executor._probe_process", lambda _pid: (True, 200))
+            executor._claim_task(task_id, allowed_statuses=("cancelled",))
+        return True, 200
+
+    monkeypatch.setattr("app.tasks.executor._probe_process", probe_after_reclaim)
+    assert executor.reconcile_orphaned_tasks() == []
+    with database.connect() as connection:
+        task = connection.execute(
+            "SELECT status,runner_pid FROM tasks WHERE task_id=?", (task_id,)
+        ).fetchone()
+    assert tuple(task) == ("running", os.getpid())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process creation time is required")
+def test_windows_process_probe_returns_stable_creation_time():
+    current = _probe_process(os.getpid())
+    assert current[0] is True
+    assert isinstance(current[1], int) and current[1] > 0
+    assert _probe_process(os.getpid()) == current
 
 
 def test_task_left_in_flight_by_a_terminated_process_requires_manual_recovery(tmp_path):

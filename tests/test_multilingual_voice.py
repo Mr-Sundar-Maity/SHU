@@ -322,7 +322,8 @@ def test_voice_assistant_marks_retrieved_memory_context_sensitive():
     assert len(assistant.history.recent()) == 2
 
 
-def test_voice_assistant_does_not_speak_a_response_after_emergency_stop():
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_voice_assistant_does_not_speak_a_response_after_emergency_stop(interrupted):
     class FakeSTT:
         def listen_and_transcribe(self, **_kwargs):
             return {"text": "Tell me a joke", "language": "en", "language_probability": 0.95}
@@ -347,8 +348,12 @@ def test_voice_assistant_does_not_speak_a_response_after_emergency_stop():
     assistant = SHUVoiceAssistant(settings=settings, stt=FakeSTT(), tts=tts)
 
     class StoppingAI:
-        def ask(self, _question, **_kwargs):
+        def ask(self, _question, *, cancel_event, **_kwargs):
+            assert not cancel_event.is_set()
             assistant.request_stop()
+            assert cancel_event.is_set()
+            if interrupted:
+                raise InterruptedError("Cancelled while waiting for local model work")
             return "This response must not be spoken."
 
     assistant.ai = StoppingAI()

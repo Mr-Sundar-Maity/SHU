@@ -234,9 +234,11 @@ python scripts\benchmark_local_ai.py --samples 3
 ```
 
 Local Ollama and Whisper inference share a FIFO CPU-work queue so a long local
-AI response does not overlap CPU-heavy transcription. A voice stop cancels a
-transcription that is still waiting in the queue; queued work also has a
-bounded wait based on `SHU_REQUEST_TIMEOUT_SECONDS`.
+AI response does not overlap CPU-heavy transcription. Voice stop and dashboard
+Emergency Stop cancel waiting inference for the active session or chat. SHU
+discards responses from requests already in progress and skips provider fallback
+after cancellation. A provider request already sent may take until its configured
+timeout to return. Queue waits are bounded by `SHU_REQUEST_TIMEOUT_SECONDS`.
 
 ## Reminders and personal memory
 
@@ -550,7 +552,9 @@ create the reviewed unsent provider draft. With `--send`, type `SEND` to approve
 the reviewed direct send. Gmail replies include
 the source thread and RFC reply headers, and Gmail forwards carry source files
 within SHU's 15 MB limit. Outlook uses its native reply/forward endpoints.
-Timed-out actions are recorded as unknown; inspect the mailbox before retrying.
+SHU records the approved reply or forward before dispatch and blocks identical
+retries after success or an uncertain outcome. If a send or draft attempt is
+uncertain, inspect the mailbox to confirm what the provider accepted.
 
 Read a public web page in an isolated Chromium, Chrome, Edge or best-effort
 Brave session. Public-page contexts are fresh and cookie-free; the read-only

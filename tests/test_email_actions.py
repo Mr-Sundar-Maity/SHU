@@ -1,11 +1,18 @@
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from email import message_from_bytes
+from threading import Event
 from unittest.mock import Mock
 
 import pytest
 
-from app.applications.communications import GmailApiProvider, MicrosoftGraphEmailProvider
+from app.applications.communications import (
+    DeliveryOutcomeUnknown,
+    GmailApiProvider,
+    MicrosoftGraphEmailProvider,
+    ProviderNotConfigured,
+)
 from app.applications.email_actions import EmailActionService
 from database.database import Database
 
@@ -139,6 +146,19 @@ def test_explicit_send_mode_records_success_without_auto_sending(database):
         ).fetchone()
     assert audit[0] == "sent"
     assert "mode=send" in audit[1]
+    assert provider.source["reply_to"] not in audit[1]
+    assert "provider-message-id" not in audit[1]
+
+    restarted = EmailActionService(Database(database.path), provider)
+    reviewed_again = restarted.prepare("reply", "message-1", "Reviewed reply", send=True)
+    with pytest.raises(ValueError, match="already completed"):
+        restarted.execute(
+            reviewed_again, confirmed=True, expected_digest=reviewed_again.digest, send=True
+        )
+    assert len(provider.calls) == 1
+
+    draft = restarted.prepare("reply", "message-1", "Reviewed reply")
+    assert restarted.execute(draft, confirmed=True, expected_digest=draft.digest) == "provider-draft-id"
 
 
 @pytest.mark.parametrize("action", ["reply", "forward"])
@@ -179,27 +199,152 @@ def test_email_action_digest_rejects_altered_reply_fields(database, changes):
     assert provider.calls == []
 
 
-def test_uncertain_email_action_timeout_is_audited_and_not_retried(database):
+@pytest.mark.parametrize(
+    ("provider_error", "provider_result", "audit_result"),
+    [
+        (TimeoutError("provider-private-details"), None, "unknown_after_timeout"),
+        (RuntimeError("provider-private-details"), None, "unknown"),
+        (None, " \n", "unknown"),
+    ],
+)
+def test_uncertain_email_action_cannot_be_replayed_after_restart(
+    database, provider_error, provider_result, audit_result
+):
     provider = ActionProvider()
-    provider.create_reply_draft = Mock(side_effect=TimeoutError("uncertain"))
+    provider.create_reply_draft = Mock(side_effect=provider_error, return_value=provider_result)
     service = EmailActionService(database, provider)
     preview = service.prepare("reply", "message-1", "Reviewed reply")
 
-    with pytest.raises(RuntimeError, match="inspect the provider before retrying"):
+    with pytest.raises(DeliveryOutcomeUnknown, match="inspect the provider before retrying") as error:
         service.execute(
             preview,
             confirmed=True,
             expected_digest=preview.digest,
         )
+    assert "provider-private-details" not in str(error.value)
+    assert error.value.__suppress_context__
+
+    restarted = EmailActionService(Database(database.path), provider)
+    reviewed_again = restarted.prepare("reply", "message-1", "Reviewed reply")
+    with pytest.raises(DeliveryOutcomeUnknown, match="already attempted"):
+        restarted.execute(reviewed_again, confirmed=True, expected_digest=reviewed_again.digest)
     provider.create_reply_draft.assert_called_once()
     with database.connect() as connection:
-        results = [
-            row[0]
-            for row in connection.execute(
-                "SELECT result FROM audit_logs ORDER BY rowid"
-            )
-        ]
-    assert results[-2:] == ["provider_action_started", "unknown_after_timeout"]
+        result = connection.execute("SELECT result FROM audit_logs").fetchone()
+    assert result["result"] == audit_result
+
+
+def test_email_action_claim_blocks_concurrent_execution_and_survives_interruption(database):
+    provider = ActionProvider()
+    provider_started = Event()
+    release_provider = Event()
+
+    def interrupted_provider(*args):
+        provider_started.set()
+        assert release_provider.wait(5)
+        raise SystemExit
+
+    provider.send_reply = Mock(side_effect=interrupted_provider)
+    first = EmailActionService(database, provider)
+    second = EmailActionService(Database(database.path), provider)
+    preview = first.prepare("reply", "message-1", "Reviewed reply", send=True)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(
+            first.execute, preview, confirmed=True, expected_digest=preview.digest, send=True
+        )
+        try:
+            assert provider_started.wait(5)
+            with pytest.raises(DeliveryOutcomeUnknown, match="already attempted"):
+                second.execute(preview, confirmed=True, expected_digest=preview.digest, send=True)
+        finally:
+            release_provider.set()
+        with pytest.raises(SystemExit):
+            pending.result(timeout=5)
+
+    restarted = EmailActionService(Database(database.path), provider)
+    with pytest.raises(DeliveryOutcomeUnknown, match="already attempted"):
+        restarted.execute(preview, confirmed=True, expected_digest=preview.digest, send=True)
+    provider.send_reply.assert_called_once()
+
+
+def test_email_preflight_configuration_failure_allows_reviewed_retry(database):
+    provider = ActionProvider()
+    provider.send_reply = Mock(
+        side_effect=[ProviderNotConfigured("provider-private-details"), "provider-message-id"]
+    )
+    service = EmailActionService(database, provider)
+    preview = service.prepare("reply", "message-1", "Reviewed reply", send=True)
+    with pytest.raises(ProviderNotConfigured, match="provider is unavailable") as error:
+        service.execute(preview, confirmed=True, expected_digest=preview.digest, send=True)
+    assert "provider-private-details" not in str(error.value)
+
+    restarted = EmailActionService(Database(database.path), provider)
+    assert restarted.execute(
+        preview, confirmed=True, expected_digest=preview.digest, send=True
+    ) == "provider-message-id"
+
+
+def test_provider_acceptance_with_failed_audit_update_blocks_replay(database):
+    provider = ActionProvider()
+    service = EmailActionService(database, provider)
+    preview = service.prepare("reply", "message-1", "Reviewed reply", send=True)
+    with database.connect() as connection, connection:
+        connection.execute(
+            """CREATE TRIGGER fail_audit_update BEFORE UPDATE ON audit_logs BEGIN
+                   SELECT RAISE(ABORT, 'synthetic database failure');
+               END"""
+        )
+
+    with pytest.raises(DeliveryOutcomeUnknown, match="could not be recorded"):
+        service.execute(preview, confirmed=True, expected_digest=preview.digest, send=True)
+    restarted = EmailActionService(Database(database.path), provider)
+    with pytest.raises(DeliveryOutcomeUnknown, match="already attempted"):
+        restarted.execute(preview, confirmed=True, expected_digest=preview.digest, send=True)
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("outcome", "prior_error"),
+    [
+        ("sent", ValueError),
+        ("unknown_after_timeout", DeliveryOutcomeUnknown),
+        ("failed:HTTPStatusError", DeliveryOutcomeUnknown),
+        (None, DeliveryOutcomeUnknown),
+        ("provider_not_configured", None),
+    ],
+)
+def test_email_action_respects_legacy_audit_history(database, outcome, prior_error):
+    provider = ActionProvider()
+    service = EmailActionService(database, provider)
+    preview = service.prepare("reply", "message-1", "Reviewed reply", send=True)
+    old_summary = (
+        f"action=reply; source=message-1; recipient=reply@example.com; digest={preview.digest}; mode=send"
+    )
+    old_rows = [("legacy-start", old_summary, "provider_action_started")]
+    if outcome == "sent":
+        old_rows.append(("legacy-finish", old_summary + "; external_id=provider-id", outcome))
+    elif outcome is not None:
+        old_rows.append(("legacy-finish", old_summary, outcome))
+    # A newer complete preflight failure must not hide an earlier provider attempt.
+    old_rows += [
+        ("legacy-preflight-start", old_summary, "provider_action_started"),
+        ("legacy-preflight-finish", old_summary, "provider_not_configured"),
+    ]
+    with database.connect() as connection, connection:
+        connection.executemany(
+            """INSERT INTO audit_logs(log_id,actor,tool,action_summary,risk,approval,result,timestamp)
+               VALUES(?,'email_action_service','email_reply',?,'L3','approved',?,'2026-11-26T00:00:00Z')""",
+            old_rows,
+        )
+
+    if prior_error is None:
+        assert service.execute(
+            preview, confirmed=True, expected_digest=preview.digest, send=True
+        ) == "provider-message-id"
+    else:
+        with pytest.raises(prior_error, match="already"):
+            service.execute(preview, confirmed=True, expected_digest=preview.digest, send=True)
+        assert provider.calls == []
 
 
 def test_gmail_reply_draft_uses_thread_headers_and_does_not_send(monkeypatch):

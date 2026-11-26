@@ -123,6 +123,32 @@ def test_dashboard_marks_retrieved_memory_sensitive(tmp_path, monkeypatch):
     assert app is not None
 
 
+def test_dashboard_emergency_stop_discards_late_chat_and_preserves_next_request(tmp_path):
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    workers = []
+    window._run_worker = lambda worker, _callback: workers.append(worker)
+    try:
+        window.input.setText("First question")
+        window._send_text()
+        first = workers[0].cancel_event
+        assert not first.is_set()
+        window._emergency_stop()
+        assert first.is_set()
+        window._chat_finished("Late reply", "")
+        assert window.status.text() == "Chat cancelled"
+        assert "Late reply" not in window.transcript.toPlainText()
+
+        window.input.setText("Second question")
+        window._send_text()
+        assert workers[1].cancel_event is not first
+        assert not workers[1].cancel_event.is_set()
+        assert window.emergency_stop.is_stopped
+        window._chat_finished("Second reply", "")
+        assert "Second reply" in window.transcript.toPlainText()
+    finally:
+        window.close()
+
+
 def test_dashboard_reset_clears_chat_context_but_preserves_approved_memory(tmp_path):
     app = QApplication.instance() or QApplication([])
     settings = Settings.from_env(

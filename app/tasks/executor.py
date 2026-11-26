@@ -61,13 +61,16 @@ class TaskExecutor:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self.database.connect() as connection:
             candidates = connection.execute(
-                "SELECT task_id,runner_pid,inflight_step,plan_json,checkpoint_json "
-                "FROM tasks WHERE status='running'"
+                "SELECT t.task_id,t.runner_pid,t.inflight_step,t.plan_json,t.checkpoint_json, "
+                "claim.rowid AS claim_rowid,claim.action_summary AS runner_identity "
+                "FROM tasks AS t LEFT JOIN audit_logs AS claim ON claim.rowid=( "
+                "SELECT rowid FROM audit_logs WHERE task_id=t.task_id AND tool='claim_task_runner' "
+                "ORDER BY rowid DESC LIMIT 1) WHERE t.status='running'"
             ).fetchall()
         recovered: list[dict[str, Any]] = []
         for row in candidates:
             runner_pid = row["runner_pid"]
-            if runner_pid is not None and _process_is_alive(int(runner_pid)):
+            if runner_pid is not None and _runner_may_be_active(runner_pid, row["runner_identity"]):
                 continue
             try:
                 steps = json.loads(row["plan_json"])
@@ -84,10 +87,13 @@ class TaskExecutor:
                     cursor = connection.execute(
                         "UPDATE tasks SET status=?,finished_at=?,runner_pid=NULL,inflight_step=? "
                         "WHERE task_id=? AND status='running' AND runner_pid IS ? "
-                        "AND inflight_step IS ? AND checkpoint_json=?",
+                        "AND inflight_step IS ? AND checkpoint_json=? AND plan_json=? "
+                        "AND (SELECT rowid FROM audit_logs WHERE task_id=tasks.task_id "
+                        "AND tool='claim_task_runner' ORDER BY rowid DESC LIMIT 1) IS ?",
                         (
                             status, now, uncertain_step, row["task_id"], runner_pid,
-                            row["inflight_step"], row["checkpoint_json"],
+                            row["inflight_step"], row["checkpoint_json"], row["plan_json"],
+                            row["claim_rowid"],
                         ),
                     )
                     if cursor.rowcount != 1:
@@ -511,6 +517,8 @@ class TaskExecutor:
         expected_checkpoint_json: str | None = None,
     ) -> None:
         placeholders = ",".join("?" for _ in allowed_statuses)
+        runner_pid = os.getpid()
+        _, creation_ticks = _probe_process(runner_pid)
         with self.database.connect() as connection:
             with connection:
                 request_guard = expected_request
@@ -542,7 +550,7 @@ class TaskExecutor:
                     f"WHERE task_id=? AND status IN ({placeholders})"
                     f"{plan_condition}{request_condition}{checkpoint_condition}",
                     (
-                        os.getpid(),
+                        runner_pid,
                         task_id,
                         *allowed_statuses,
                         *((expected_plan_json,) if expected_plan_json is not None else ()),
@@ -554,6 +562,21 @@ class TaskExecutor:
                     if expected_checkpoint_json is not None:
                         raise ValueError("Task checkpoint changed or task is no longer eligible; review it again")
                     raise ValueError("Task is already running or is not eligible for execution")
+                connection.execute(
+                    "INSERT INTO audit_logs(log_id,task_id,actor,tool,action_summary,risk,approval,result,timestamp) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        str(uuid.uuid4()),
+                        task_id,
+                        "task_executor",
+                        "claim_task_runner",
+                        json.dumps({"pid": runner_pid, "creation_ticks": creation_ticks}),
+                        "L1",
+                        "system",
+                        "running",
+                        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    ),
+                )
 
     def _set_status(self, task_id: str, status: str, *, finished: bool = False) -> None:
         with self.database.connect() as connection:
@@ -708,9 +731,28 @@ def _is_transient_tool_error(
     return False
 
 
-def _process_is_alive(pid: int) -> bool:
-    if pid <= 0:
+def _runner_may_be_active(pid: int, identity_json: str | None) -> bool:
+    alive_or_unknown, creation_ticks = _probe_process(pid)
+    if not alive_or_unknown:
         return False
+    if creation_ticks is None or identity_json is None:
+        return True
+    try:
+        identity = json.loads(identity_json)
+    except (TypeError, json.JSONDecodeError):
+        return True
+    if not isinstance(identity, dict) or identity.get("pid") != pid:
+        return True
+    claimed_ticks = identity.get("creation_ticks")
+    if type(claimed_ticks) is not int or claimed_ticks <= 0:
+        return True
+    return creation_ticks == claimed_ticks
+
+
+def _probe_process(pid: int) -> tuple[bool, int | None]:
+    """Return possible liveness and, when available, the process creation time."""
+    if pid <= 0:
+        return False, None
     if os.name == "nt":
         import ctypes
         from ctypes import wintypes
@@ -720,19 +762,43 @@ def _process_is_alive(pid: int) -> bool:
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
         kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        filetime_pointer = ctypes.POINTER(wintypes.FILETIME)
+        kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (filetime_pointer,) * 4
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
         kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-        handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        synchronize = 0x00100000
+        query_limited_information = 0x1000
+        handle = kernel32.OpenProcess(synchronize | query_limited_information, False, pid)
         if not handle:
-            return ctypes.get_last_error() == 5  # Access denied means fail closed as alive.
+            handle = kernel32.OpenProcess(synchronize, False, pid)
+        if not handle:
+            # A nonexistent PID yields ERROR_INVALID_PARAMETER. Access denied or an
+            # unexpected error leaves liveness and ownership indeterminate.
+            return ctypes.get_last_error() != 87, None
         try:
             result = kernel32.WaitForSingleObject(handle, 0)
-            return result == 0x00000102 or result not in {0, 0xFFFFFFFF}
+            if result == 0:  # WAIT_OBJECT_0
+                return False, None
+            if result != 0x00000102:  # WAIT_TIMEOUT
+                return True, None
+            created = wintypes.FILETIME()
+            exited = wintypes.FILETIME()
+            kernel_time = wintypes.FILETIME()
+            user_time = wintypes.FILETIME()
+            if kernel32.GetProcessTimes(
+                handle, ctypes.byref(created), ctypes.byref(exited),
+                ctypes.byref(kernel_time), ctypes.byref(user_time),
+            ):
+                ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+                return True, ticks or None
+            return True, None
         finally:
             kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
-        return True
+        return True, None
     except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+        return False, None
+    except OSError:
+        return True, None

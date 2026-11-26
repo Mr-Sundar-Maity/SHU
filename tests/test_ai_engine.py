@@ -1,9 +1,14 @@
-import pytest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from time import monotonic, sleep
 from unittest.mock import Mock
+
+import pytest
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from app.ai.ai_engine import SHUAIEngine
 from app.config import Settings
+from app.cpu_work_queue import CPUWorkQueue
 
 
 def make_settings(**overrides):
@@ -37,6 +42,59 @@ def test_local_request_uses_selected_model_and_bounded_messages(monkeypatch):
     assert kwargs["json"]["messages"][0]["role"] == "system"
     assert kwargs["json"]["messages"][-1] == {"role": "user", "content": "Hi"}
     assert kwargs["timeout"] == 60.0
+
+
+def test_cancelling_a_queued_ai_request_removes_its_slot(monkeypatch):
+    queue = CPUWorkQueue()
+    monkeypatch.setattr("app.ai.ai_engine.CPU_WORK_QUEUE", queue)
+    response = Mock()
+    response.json.return_value = {"message": {"content": "Ready"}}
+    post = Mock(return_value=response)
+    monkeypatch.setattr("app.ai.ai_engine.requests.post", post)
+    engine = SHUAIEngine(make_settings(SHU_CLOUD_FALLBACK="true"))
+    engine.ask_google = Mock()
+    cancelled = Event()
+    with ThreadPoolExecutor(max_workers=1) as worker, queue.slot():
+        pending = worker.submit(engine.ask, "Hello", cancel_event=cancelled)
+        try:
+            deadline = monotonic() + 2
+            while not queue.waiting_count and monotonic() < deadline:
+                sleep(0.005)
+            assert queue.waiting_count == 1
+        finally:
+            cancelled.set()
+        with pytest.raises(InterruptedError):
+            pending.result(timeout=2)
+        assert queue.waiting_count == 0
+        post.assert_not_called()
+        engine.ask_google.assert_not_called()
+
+    assert engine.ask("Hello again") == "Ready"
+    post.assert_called_once()
+
+
+@pytest.mark.parametrize("provider", ["ollama", "google"])
+@pytest.mark.parametrize("failed", [False, True])
+def test_stopped_provider_discards_late_result_and_skips_fallback(provider, failed):
+    engine = SHUAIEngine(make_settings(SHU_CLOUD_FALLBACK="true"))
+    cancelled = Event()
+
+    def stopped(_question, *, cancel_event, **_kwargs):
+        assert cancel_event is cancelled
+        cancel_event.set()
+        if failed:
+            raise RequestsConnectionError()
+        return "Late response"
+
+    engine.ask_local = Mock(side_effect=stopped if provider == "ollama" else None)
+    engine.ask_google = Mock(side_effect=stopped if provider == "google" else None)
+    with pytest.raises(InterruptedError):
+        engine.ask("Hello", provider=provider, cancel_event=cancelled)
+    selected, fallback = (engine.ask_local, engine.ask_google)
+    if provider == "google":
+        selected, fallback = fallback, selected
+    selected.assert_called_once()
+    fallback.assert_not_called()
 
 
 def test_local_request_can_use_deterministic_generation_temperature(monkeypatch):
