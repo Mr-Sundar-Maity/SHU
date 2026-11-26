@@ -1,4 +1,4 @@
-# SHU
+# SHU - Personal Voice Assistant
 
 SHU is a local-first Windows voice assistant. The repository contains the
 voice and AI path plus the v1 foundations for approved memory, task execution,
