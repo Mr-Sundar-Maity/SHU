@@ -1,4 +1,5 @@
 import json
+import builtins
 from types import SimpleNamespace
 import pytest
 
@@ -20,6 +21,30 @@ from app.cli import (
 from app.applications.contacts import ContactBook
 from app.applications.communications import DeliveryOutcomeUnknown
 from database.database import Database
+
+
+def test_gui_missing_webengine_reports_full_setup(monkeypatch, capsys):
+    from app.cli import launch_gui
+    original_import = builtins.__import__
+    def importing(name, *args, **kwargs):
+        if name == 'app.interface.frontend':
+            raise ModuleNotFoundError(name='PySide6.QtWebEngineWidgets')
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', importing)
+    assert launch_gui() == 2
+    assert 'requires full setup' in capsys.readouterr().out
+
+
+def test_gui_does_not_mask_missing_application_module(monkeypatch):
+    from app.cli import launch_gui
+    original_import = builtins.__import__
+    def importing(name, *args, **kwargs):
+        if name == 'app.interface.frontend':
+            raise ModuleNotFoundError(name='app.interface.broken')
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', importing)
+    with pytest.raises(ModuleNotFoundError):
+        launch_gui()
 
 
 def test_console_encoding_uses_utf8_when_stream_supports_reconfigure(monkeypatch):

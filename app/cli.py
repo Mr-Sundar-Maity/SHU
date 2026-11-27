@@ -1471,7 +1471,7 @@ def launch_gui() -> int:
     try:
         from app.interface.frontend import main as dashboard_main
     except ModuleNotFoundError as error:
-        if error.name not in {"PySide6", "docx", "openpyxl", "pptx", "apscheduler"}:
+        if (error.name or "").partition(".")[0] not in {"PySide6", "docx", "openpyxl", "pptx", "apscheduler"}:
             raise
         print(r"The dashboard requires full setup. Run scripts\setup.ps1 without -CoreOnly.")
         return 2

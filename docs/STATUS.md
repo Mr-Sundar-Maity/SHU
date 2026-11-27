@@ -54,11 +54,12 @@ exact-commit CI evidence.
 
 See [PRD_TRACEABILITY.md](PRD_TRACEABILITY.md) for requirement-level evidence and the exact remaining acceptance work.
 
-GitHub `main` received the r14 and r15 source at `8ff7c66`; the r16/r17 changes
-are local and not yet published. GitHub blocked its Windows CI check before runner
-assignment due to an account billing lock (zero job steps). Hosted setup and
-tests remain pending; the local checkout passed. No billing setting was changed.
-[r15 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/45895332387/job/140167692878)
+GitHub `main` received r16/r17 and the r18 frontend integration at `152c4ab`.
+GitHub blocked its Windows CI check before runner assignment due to an account
+billing lock (zero job steps). Hosted setup and tests remain pending; local
+checks passed. No billing setting was changed. A final missing-WebEngine setup
+hint also passed the focused CLI/bridge suite (75 tests).
+[r18 Windows CI](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/46057064965)
 
 ## Machine checks
 

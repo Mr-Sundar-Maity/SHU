@@ -56,16 +56,27 @@ and trained `Hey SHU` model.
 - `frontend/README.md` was not edited. Its original SHA-256 remains
   `dcd128fc9176bfa728c1887bcd7a690552c667c07d9c61f427b1fff018bef55d`.
   Integrated startup/build instructions are in the root README instead.
-- Personal source bundle: `dist/SHU_personal_source_2026-11-28_r18.zip`, SHA-256
-  `5f6bf187d6fc88dd9095df1161fa96254d529d142f0a5ead368b5223bb5e83b2`.
+- Personal source bundle: `dist/SHU_personal_source_2026-11-28_r18b.zip`, SHA-256
+  `67c6a01c976dfb2d63bc7206aa441bfefa8ee720218f04264042bdeab51c111b`.
   Archive path, private-file, CRC and Python syntax checks passed. It contains
   frontend source, not generated assets or a signed installer.
-- Resume here: check GitHub publication/CI, then remaining PRD acceptance work.
+- Resume here: remaining PRD acceptance and clean-machine checks; hosted CI
+  requires the account billing lock to be resolved.
   This UI change does not complete live microphone/speaker acceptance, trained
   wake-word testing, WhatsApp credentials/consented delivery, Gemini availability
   or clean-machine acceptance. No external message was sent and no microphone
   was recorded during this checkpoint. Previous live provider results below
   were not rechecked for this UI change.
+- Publication verified: `152c4ab` pushed the React integration and the preceding
+  r16/r17 commits to `Mr-Sundar-Maity/SHU` main. Hosted run
+  [46057064965](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/46057064965)
+  failed before any job step: GitHub reports the account is locked due to a
+  billing issue. No hosted test executed and no billing settings were changed.
+- Final upgrade check: a missing `PySide6.QtWebEngineWidgets` now produces the
+  existing full-setup guidance rather than an import traceback. Unrelated
+  missing application modules still raise. The final focused CLI/bridge run
+  passed **75 tests in 14.85 s**, including these two added regressions. The
+  792-test full run above predates only this small import-error handling fix.
 
 ## Earlier checkpoint on 2026-11-27 (r17)
 
