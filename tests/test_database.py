@@ -294,7 +294,10 @@ def test_v4_database_migration_backs_up_and_adds_local_contacts(tmp_path):
     assert database.integrity_check() == "ok"
     assert path.with_name("shu.db.v4.bak").exists()
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert "template_json" in {
+            row[1] for row in connection.execute("PRAGMA table_info(communication_drafts)")
+        }
         assert {
             row[1] for row in connection.execute("PRAGMA table_info(contacts)")
         } == {

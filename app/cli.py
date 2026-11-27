@@ -19,6 +19,7 @@ from app.applications.communications import (
     MicrosoftGraphEmailProvider,
     ProviderNotConfigured,
     WhatsAppCloudApiProvider,
+    render_whatsapp_template,
     save_mail_attachment,
 )
 from app.applications.email_actions import EmailActionService
@@ -198,6 +199,7 @@ def _communication_service(
             lambda: token("whatsapp_cloud_api_access_token"),
             settings.whatsapp_phone_number_id,
             api_version=settings.whatsapp_graph_api_version,
+            business_account_id=settings.whatsapp_business_account_id,
         )
     return CommunicationService(
         database,
@@ -252,6 +254,97 @@ def communication_draft(channel: str) -> int:
         return 1
     print("Draft created:", draft_id)
     print("Preview it before any send: python -m app.cli comms preview", draft_id)
+    return 0
+
+
+def communication_template_draft(
+    recipient: str,
+    name: str,
+    language: str,
+    parameters: list[str],
+    *,
+    body_template: str = "",
+    preview_text: str = "",
+) -> int:
+    """Draft an approved WhatsApp template message with its exact rendered body."""
+    service = _communication_service()
+    service.database.initialize()
+    resolved = resolve_whatsapp_recipient(recipient, ContactBook(service.database))
+    if resolved is None:
+        return 2
+    if body_template:
+        try:
+            body = render_whatsapp_template(body_template, parameters)
+        except ValueError as error:
+            print("Template preview could not be rendered:", str(error))
+            return 2
+    elif preview_text.strip():
+        body = preview_text.strip()
+    else:
+        print("Provide --body-template (with numbered placeholders) or --preview-text.")
+        return 2
+    try:
+        draft_id = service.create_template_draft(
+            "whatsapp",
+            resolved.phone_e164,
+            name,
+            language,
+            parameters,
+            body,
+        )
+    except Exception as error:
+        print("Draft was not created:", type(error).__name__)
+        return 1
+    print("Template draft created:", draft_id)
+    print("Preview it before any send: python -m app.cli comms preview", draft_id)
+    return 0
+
+
+def communication_template_create(
+    name: str,
+    language: str,
+    category: str,
+    body: str,
+    *,
+    header: str | None = None,
+    footer: str | None = None,
+) -> int:
+    """Submit a new WhatsApp message template for Meta review."""
+    print("WhatsApp template submission:")
+    print("Name:", name)
+    print("Language:", language)
+    print("Category:", category)
+    if header:
+        print("Header:", header)
+    print("Body:\n" + body)
+    if footer:
+        print("Footer:", footer)
+    print("Meta reviews each template before it can be sent.")
+    try:
+        answer = input("Type YES to submit this exact template: ")
+    except EOFError:
+        answer = ""
+    if answer.strip() != "YES":
+        print("Template was not submitted.")
+        return 2
+    try:
+        result = _communication_service().create_whatsapp_template(
+            name,
+            language,
+            category,
+            body,
+            header_text=header,
+            footer_text=footer,
+        )
+    except Exception as error:
+        print("Template was not submitted:", type(error).__name__)
+        return 1
+    print(
+        "Template submitted. Provider ID:",
+        result["id"],
+        "Status:",
+        result["status"],
+    )
     return 0
 
 
@@ -356,6 +449,15 @@ def communication_preview(draft_id: str) -> int:
     print("Recipient:", preview.recipient)
     if preview.subject:
         print("Subject:", preview.subject)
+    if preview.template:
+        print(
+            "Template:",
+            preview.template["name"],
+            "(" + str(preview.template["language"]) + ")",
+        )
+        parameters = preview.template["body_parameters"]
+        if parameters:
+            print("Template parameters:", json.dumps(parameters, ensure_ascii=False))
     print("Message:\n" + preview.body)
     if preview.attachments:
         print("Attachments:")
@@ -1399,6 +1501,36 @@ def build_parser() -> argparse.ArgumentParser:
     comms_sub = comms_parser.add_subparsers(dest="comms_action", required=True)
     draft_parser = comms_sub.add_parser("draft", help="create an email or WhatsApp draft")
     draft_parser.add_argument("--channel", choices=("email", "whatsapp"), required=True)
+    template_draft_parser = comms_sub.add_parser(
+        "draft-template", help="draft a WhatsApp template message by its approved name"
+    )
+    template_draft_parser.add_argument("--recipient", required=True)
+    template_draft_parser.add_argument("--name", required=True, help="approved template name")
+    template_draft_parser.add_argument("--language", default="en_US")
+    template_draft_parser.add_argument(
+        "--param", dest="parameters", action="append", default=[], help="body parameter in order"
+    )
+    template_draft_parser.add_argument(
+        "--body-template",
+        default="",
+        help="template body containing {{1}}, {{2}}, ... placeholders",
+    )
+    template_draft_parser.add_argument(
+        "--preview-text",
+        default="",
+        help="exact rendered body when the template text is not supplied",
+    )
+    template_create_parser = comms_sub.add_parser(
+        "template-create", help="submit a WhatsApp message template for Meta review"
+    )
+    template_create_parser.add_argument("--name", required=True)
+    template_create_parser.add_argument("--language", default="en_US")
+    template_create_parser.add_argument(
+        "--category", required=True, choices=("UTILITY", "MARKETING", "AUTHENTICATION")
+    )
+    template_create_parser.add_argument("--body", required=True)
+    template_create_parser.add_argument("--header")
+    template_create_parser.add_argument("--footer")
     preview_parser = comms_sub.add_parser("preview", help="show exact message and approval digest")
     preview_parser.add_argument("draft_id")
     status_parser = comms_sub.add_parser("status", help="check a draft's delivery state")
@@ -1605,6 +1737,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "comms":
         if args.comms_action == "draft":
             return communication_draft(args.channel)
+        if args.comms_action == "draft-template":
+            return communication_template_draft(
+                args.recipient,
+                args.name,
+                args.language,
+                args.parameters,
+                body_template=args.body_template,
+                preview_text=args.preview_text,
+            )
+        if args.comms_action == "template-create":
+            return communication_template_create(
+                args.name,
+                args.language,
+                args.category,
+                args.body,
+                header=args.header,
+                footer=args.footer,
+            )
         if args.comms_action == "preview":
             return communication_preview(args.draft_id)
         if args.comms_action == "status":

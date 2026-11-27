@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -138,6 +138,9 @@ _MIGRATIONS = {
             updated_at TEXT NOT NULL
         )""",
         "CREATE INDEX IF NOT EXISTS ix_contacts_normalized_name ON contacts(normalized_name)",
+    ),
+    6: (
+        "ALTER TABLE communication_drafts ADD COLUMN template_json TEXT NOT NULL DEFAULT '{}'",
     ),
 }
 

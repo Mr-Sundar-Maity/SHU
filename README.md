@@ -516,12 +516,33 @@ python -m app.cli comms preview DRAFT_ID
 python -m app.cli comms send DRAFT_ID --digest PREVIEW_DIGEST --confirm
 ```
 
+WhatsApp templates are also supported. Submit a new template for Meta review,
+then draft a reviewed template message with its exact rendered body. Template
+text must use numbered placeholders such as `{{1}}`; pass each value in order
+with a repeated `--param`. The preview digest binds the template name, language,
+parameter values and rendered text, so a send is refused if any of them change
+between review and delivery.
+
+```powershell
+python -m app.cli comms template-create --name order_ready --language en_US --category UTILITY --body "Hello {{1}}, order {{2}} is ready."
+python -m app.cli comms draft-template --recipient CONTACT_OR_NUMBER --name order_ready --language en_US --param Asha --param A-42 --body-template "Hello {{1}}, order {{2}} is ready."
+python -m app.cli comms preview DRAFT_ID
+python -m app.cli comms send DRAFT_ID --digest PREVIEW_DIGEST --confirm
+```
+
+Creating a template needs `SHU_WHATSAPP_BUSINESS_ACCOUNT_ID` and an access
+token. Sending an already-approved template needs only the phone number ID and
+token. Meta reviews every new template before it can be delivered. If SHU has no
+local copy of the template text, pass the exact rendered body with
+`--preview-text` instead of `--body-template`.
+
 If SHU cannot confirm that the provider accepted a send or draft save, it
 records the outcome as `unknown`. Check the provider before creating another
 copy. The original draft stays blocked from replay.
 
 Set `SHU_EMAIL_PROVIDER=gmail` or `outlook` for email and configure the WhatsApp
-Business phone number ID and Graph API version in `.env`. Store the WhatsApp
+Business phone number ID, optional business account ID for template creation,
+and Graph API version in `.env`. Store the WhatsApp
 access token with the hidden-input Credential Manager command below; do not put
 the token in `.env` or chat.
 

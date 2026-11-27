@@ -91,6 +91,7 @@ class Settings:
     microsoft_oauth_client_id: str | None = None
     microsoft_oauth_tenant: str = "common"
     whatsapp_phone_number_id: str | None = None
+    whatsapp_business_account_id: str | None = None
     whatsapp_graph_api_version: str = "v27.0"
     wakeword_model_path: Path | None = None
 
@@ -205,6 +206,9 @@ class Settings:
         whatsapp_phone_number_id = get("SHU_WHATSAPP_PHONE_NUMBER_ID", "") or None
         if whatsapp_phone_number_id and not re.fullmatch(r"\d{5,32}", whatsapp_phone_number_id):
             raise ValueError("SHU_WHATSAPP_PHONE_NUMBER_ID must contain 5-32 digits")
+        whatsapp_business_account_id = get("SHU_WHATSAPP_BUSINESS_ACCOUNT_ID", "") or None
+        if whatsapp_business_account_id and not re.fullmatch(r"\d{5,32}", whatsapp_business_account_id):
+            raise ValueError("SHU_WHATSAPP_BUSINESS_ACCOUNT_ID must contain 5-32 digits")
         whatsapp_api_version = get("SHU_WHATSAPP_GRAPH_API_VERSION", "v27.0")
         if not re.fullmatch(r"v\d+\.\d+", whatsapp_api_version):
             raise ValueError("SHU_WHATSAPP_GRAPH_API_VERSION must look like v27.0")
@@ -259,6 +263,7 @@ class Settings:
             microsoft_oauth_client_id=microsoft_client_id or None,
             microsoft_oauth_tenant=microsoft_tenant,
             whatsapp_phone_number_id=whatsapp_phone_number_id,
+            whatsapp_business_account_id=whatsapp_business_account_id,
             whatsapp_graph_api_version=whatsapp_api_version,
             wakeword_model_path=Path(wakeword_path).expanduser() if wakeword_path else None,
         )

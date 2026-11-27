@@ -181,16 +181,20 @@ def test_communication_settings_validate_provider_and_whatsapp_id():
         {
             "SHU_EMAIL_PROVIDER": "outlook",
             "SHU_WHATSAPP_PHONE_NUMBER_ID": "123456789012345",
+            "SHU_WHATSAPP_BUSINESS_ACCOUNT_ID": "987654321098765",
             "SHU_WHATSAPP_GRAPH_API_VERSION": "v27.0",
         }
     )
     assert settings.email_provider == "outlook"
     assert settings.whatsapp_phone_number_id == "123456789012345"
+    assert settings.whatsapp_business_account_id == "987654321098765"
     assert settings.whatsapp_graph_api_version == "v27.0"
     with pytest.raises(ValueError, match="SHU_EMAIL_PROVIDER"):
         Settings.from_env({"SHU_EMAIL_PROVIDER": "unknown"})
     with pytest.raises(ValueError, match="PHONE_NUMBER_ID"):
         Settings.from_env({"SHU_WHATSAPP_PHONE_NUMBER_ID": "123/456"})
+    with pytest.raises(ValueError, match="BUSINESS_ACCOUNT_ID"):
+        Settings.from_env({"SHU_WHATSAPP_BUSINESS_ACCOUNT_ID": "123/456"})
 
 
 def test_diagnostics_recognize_external_gmail_client_without_claiming_login(tmp_path):

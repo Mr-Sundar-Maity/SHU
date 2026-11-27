@@ -11,6 +11,7 @@ from app.applications.communications import (
     MicrosoftGraphEmailProvider,
     ProviderNotConfigured,
     WhatsAppCloudApiProvider,
+    render_whatsapp_template,
     save_mail_attachment,
 )
 from database.database import Database
@@ -472,3 +473,227 @@ def test_graph_attachment_limit_fails_before_network_request(monkeypatch):
             attachments=[("large.bin", b"x" * 2_000_001)],
         )
     post.assert_not_called()
+
+
+class FakeTemplateProvider(FakeProvider):
+    def __init__(self):
+        super().__init__()
+        self.template_calls = []
+        self.template_create_calls = []
+
+    def send_template(self, recipient, name, language, parameters):
+        self.template_calls.append((recipient, name, language, list(parameters)))
+        return "wamid.template-sent"
+
+    def create_template(self, name, language, category, body, *, header_text=None, footer_text=None):
+        self.template_create_calls.append(
+            (name, language, category, body, header_text, footer_text)
+        )
+        return {"id": "template-id", "status": "PENDING", "category": category}
+
+
+def test_whatsapp_template_draft_binds_rendered_preview_and_sends_template(db):
+    provider = FakeTemplateProvider()
+    service = CommunicationService(db, whatsapp_provider=provider)
+    body = render_whatsapp_template(
+        "Hello {{1}}, order {{2}} is ready.", ["Asha", "A-42"]
+    )
+    draft_id = service.create_template_draft(
+        "whatsapp",
+        "+14155550123",
+        "order_ready",
+        "en_US",
+        ["Asha", "A-42"],
+        body,
+    )
+
+    preview = service.preview(draft_id)
+    assert preview.body == "Hello Asha, order A-42 is ready."
+    assert preview.template == {
+        "name": "order_ready",
+        "language": "en_US",
+        "body_parameters": ["Asha", "A-42"],
+    }
+
+    with pytest.raises(PermissionError, match="changed"):
+        service.send(draft_id, confirmed=True, expected_digest="stale")
+    assert provider.template_calls == []
+
+    assert (
+        service.send(draft_id, confirmed=True, expected_digest=preview.digest)
+        == "wamid.template-sent"
+    )
+    assert provider.template_calls == [
+        ("+14155550123", "order_ready", "en_US", ["Asha", "A-42"])
+    ]
+    assert provider.calls == []
+    assert service.status(draft_id) == "sent"
+
+
+def test_whatsapp_template_preview_changes_when_body_or_parameters_change(db):
+    service = CommunicationService(db, whatsapp_provider=FakeTemplateProvider())
+    draft_id = service.create_template_draft(
+        "whatsapp", "+14155550123", "welcome", "en_US", ["Asha"], "Hi Asha"
+    )
+    digest = service.preview(draft_id).digest
+
+    with db.connect() as connection, connection:
+        connection.execute(
+            "UPDATE communication_drafts SET body='Hi someone else' WHERE draft_id=?",
+            (draft_id,),
+        )
+    changed = service.preview(draft_id)
+    assert changed.digest != digest
+    with pytest.raises(PermissionError, match="changed"):
+        service.send(draft_id, confirmed=True, expected_digest=digest)
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("email", "+14155550123", "welcome", "en_US", [], "Hi"), "WhatsApp only"),
+        (("whatsapp", "+14155550123", "Bad Name", "en_US", [], "Hi"), "template name"),
+        (("whatsapp", "+14155550123", "welcome", "EN-us", [], "Hi"), "template language"),
+        (("whatsapp", "+14155550123", "welcome", "en_US", ["line\nbreak"], "Hi"), "line breaks"),
+    ],
+)
+def test_whatsapp_template_drafts_validate_reviewed_parts(db, args, message):
+    service = CommunicationService(db, whatsapp_provider=FakeTemplateProvider())
+    with pytest.raises(ValueError, match=message):
+        service.create_template_draft(*args)
+
+
+def test_whatsapp_template_render_requires_sequential_placeholders():
+    assert render_whatsapp_template("Hi {{1}}", ["Asha"]) == "Hi Asha"
+    assert render_whatsapp_template("No parameters", []) == "No parameters"
+    with pytest.raises(ValueError, match="starting at"):
+        render_whatsapp_template("Hi {{2}}", ["Asha"])
+    with pytest.raises(ValueError, match="no placeholders"):
+        render_whatsapp_template("No placeholders", ["Asha"])
+
+
+def test_whatsapp_cloud_api_provider_builds_documented_template_message(monkeypatch):
+    response = Mock()
+    response.json.return_value = {"messages": [{"id": "wamid.template"}]}
+    post = Mock(return_value=response)
+    monkeypatch.setattr("app.applications.communications.httpx.post", post)
+    provider = WhatsAppCloudApiProvider(
+        lambda: "test-access-token", "123456789012345", api_version="v27.0"
+    )
+
+    assert (
+        provider.send_template(
+            "+14155550123", "order_ready", "en_US", ["Asha", "A-42"]
+        )
+        == "wamid.template"
+    )
+    args, kwargs = post.call_args
+    assert args[0] == "https://graph.facebook.com/v27.0/123456789012345/messages"
+    assert kwargs["json"] == {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": "14155550123",
+        "type": "template",
+        "template": {
+            "name": "order_ready",
+            "language": {"code": "en_US"},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": "Asha"},
+                        {"type": "text", "text": "A-42"},
+                    ],
+                }
+            ],
+        },
+    }
+
+    post.reset_mock()
+    provider.send_template("+14155550123", "hello_world", "en")
+    assert post.call_args.kwargs["json"]["template"] == {
+        "name": "hello_world",
+        "language": {"code": "en"},
+    }
+
+
+def test_whatsapp_cloud_api_provider_submits_template_to_business_account(monkeypatch):
+    response = Mock()
+    response.json.return_value = {
+        "id": "1234567890",
+        "status": "PENDING",
+        "category": "UTILITY",
+    }
+    post = Mock(return_value=response)
+    monkeypatch.setattr("app.applications.communications.httpx.post", post)
+    provider = WhatsAppCloudApiProvider(
+        lambda: "test-access-token",
+        "123456789012345",
+        api_version="v27.0",
+        business_account_id="987654321098765",
+    )
+
+    result = provider.create_template(
+        "order_ready",
+        "en_US",
+        "UTILITY",
+        "Hello {{1}}, order {{2}} is ready.",
+        header_text="Order update",
+        footer_text="Thank you",
+    )
+
+    assert result == {"id": "1234567890", "status": "PENDING", "category": "UTILITY"}
+    args, kwargs = post.call_args
+    assert (
+        args[0]
+        == "https://graph.facebook.com/v27.0/987654321098765/message_templates"
+    )
+    assert kwargs["json"] == {
+        "name": "order_ready",
+        "language": "en_US",
+        "category": "UTILITY",
+        "components": [
+            {"type": "HEADER", "format": "TEXT", "text": "Order update"},
+            {"type": "BODY", "text": "Hello {{1}}, order {{2}} is ready."},
+            {"type": "FOOTER", "text": "Thank you"},
+        ],
+    }
+
+
+def test_whatsapp_template_creation_requires_business_account(monkeypatch):
+    post = Mock()
+    monkeypatch.setattr("app.applications.communications.httpx.post", post)
+    provider = WhatsAppCloudApiProvider(
+        lambda: "test-access-token", "123456789012345", api_version="v27.0"
+    )
+    with pytest.raises(ProviderNotConfigured, match="BUSINESS_ACCOUNT_ID"):
+        provider.create_template("welcome", "en_US", "UTILITY", "Hello")
+    post.assert_not_called()
+    with pytest.raises(ValueError, match="account ID"):
+        WhatsAppCloudApiProvider(
+            lambda: "token",
+            "123456",
+            api_version="v27.0",
+            business_account_id="not/a/number",
+        )
+
+
+def test_service_template_creation_uses_provider_without_sending(db):
+    provider = FakeTemplateProvider()
+    service = CommunicationService(db, whatsapp_provider=provider)
+
+    result = service.create_whatsapp_template(
+        "order_ready", "en_US", "UTILITY", "Hello {{1}}", header_text="Update"
+    )
+
+    assert result["id"] == "template-id"
+    assert provider.template_create_calls == [
+        ("order_ready", "en_US", "UTILITY", "Hello {{1}}", "Update", None)
+    ]
+    assert provider.calls == [] and provider.template_calls == []
+
+
+def test_template_creation_without_whatsapp_provider_is_not_sent(db):
+    service = CommunicationService(db)
+    with pytest.raises(ProviderNotConfigured, match="not configured"):
+        service.create_whatsapp_template("welcome", "en_US", "UTILITY", "Hello")

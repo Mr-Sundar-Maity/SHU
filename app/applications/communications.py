@@ -47,6 +47,71 @@ class DraftPreview:
     body: str
     digest: str
     attachments: tuple[dict[str, object], ...] = ()
+    template: dict[str, object] | None = None
+
+
+_TEMPLATE_NAME = re.compile(r"[a-z0-9_]{1,512}")
+_TEMPLATE_LANGUAGE = re.compile(r"[a-z]{2,3}(?:_[A-Z]{2})?")
+_TEMPLATE_PLACEHOLDER = re.compile(r"\{\{(\d+)\}\}")
+_TEMPLATE_CATEGORIES = {"UTILITY", "MARKETING", "AUTHENTICATION"}
+
+
+def _validate_template_name(value: str) -> str:
+    if not isinstance(value, str) or not _TEMPLATE_NAME.fullmatch(value):
+        raise ValueError(
+            "WhatsApp template name must contain 1-512 lowercase letters, digits or underscores"
+        )
+    return value
+
+
+def _validate_template_language(value: str) -> str:
+    if not isinstance(value, str) or not _TEMPLATE_LANGUAGE.fullmatch(value):
+        raise ValueError("WhatsApp template language must look like en_US or en")
+    return value
+
+
+def _validate_template_parameters(values: object) -> list[str]:
+    if not isinstance(values, (list, tuple)) or len(values) > 10:
+        raise ValueError("A WhatsApp template accepts at most 10 body parameters")
+    parameters: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value or len(value) > 1024:
+            raise ValueError("Each WhatsApp template parameter must contain 1-1024 characters")
+        if any(character in value for character in "\r\n\t"):
+            raise ValueError("WhatsApp template parameters cannot contain line breaks or tabs")
+        parameters.append(value)
+    return parameters
+
+
+def render_whatsapp_template(body_template: str, parameters: list[str]) -> str:
+    """Render the exact text Meta will deliver for a template and its parameters."""
+    if not isinstance(body_template, str) or not body_template.strip():
+        raise ValueError("WhatsApp template body preview must contain 1-1024 characters")
+    body = body_template.strip()
+    if len(body) > 1024:
+        raise ValueError("WhatsApp template body preview must contain 1-1024 characters")
+    indexes = sorted({int(match) for match in _TEMPLATE_PLACEHOLDER.findall(body)})
+    if indexes:
+        if indexes != list(range(1, len(parameters) + 1)):
+            raise ValueError(
+                "Template parameters must fill numbered placeholders starting at {{1}}"
+            )
+        rendered = body
+        for index, value in enumerate(parameters, start=1):
+            rendered = re.sub(
+                r"\{\{%d\}\}" % index,
+                lambda _match, text=value: text,
+                rendered,
+            )
+    else:
+        if parameters:
+            raise ValueError(
+                "Template parameters were supplied but the template body has no placeholders"
+            )
+        rendered = body
+    if _TEMPLATE_PLACEHOLDER.search(rendered):
+        raise ValueError("Template body preview still contains unfilled placeholders")
+    return rendered
 
 
 class ProviderNotConfigured(RuntimeError):
@@ -216,6 +281,82 @@ class CommunicationService:
                 self._audit(connection, draft_id, channel, "not_required", "draft_created")
         return draft_id
 
+    def create_template_draft(
+        self,
+        channel: str,
+        recipient: str,
+        template_name: str,
+        language: str,
+        body_parameters: list[str] | tuple[str, ...],
+        preview_body: str,
+    ) -> str:
+        """Create a WhatsApp template message draft with the exact rendered preview."""
+        channel = channel.lower()
+        if channel != "whatsapp":
+            raise ValueError("Template drafts are supported for WhatsApp only")
+        self._validate_recipient(channel, recipient)
+        template_name = _validate_template_name(template_name)
+        language = _validate_template_language(language)
+        parameters = _validate_template_parameters(body_parameters)
+        body = preview_body.strip()
+        if not body or len(body) > 1024:
+            raise ValueError("WhatsApp template body preview must contain 1-1024 characters")
+        template = {
+            "name": template_name,
+            "language": language,
+            "body_parameters": parameters,
+        }
+        draft_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.database.connect() as connection:
+            with connection:
+                connection.execute(
+                    "INSERT INTO communication_drafts(draft_id,channel,recipient,subject,body,status,created_at,attachments_json,template_json) "
+                    "VALUES(?,?,?,?,?,'draft',?,?,?)",
+                    (
+                        draft_id,
+                        channel,
+                        recipient.strip(),
+                        "",
+                        body,
+                        now,
+                        "[]",
+                        json.dumps(template, ensure_ascii=False),
+                    ),
+                )
+                self._audit(connection, draft_id, channel, "not_required", "draft_created")
+        return draft_id
+
+    def create_whatsapp_template(
+        self,
+        name: str,
+        language: str,
+        category: str,
+        body_text: str,
+        *,
+        header_text: str | None = None,
+        footer_text: str | None = None,
+    ) -> dict[str, object]:
+        """Submit a new message template to the configured WhatsApp business account."""
+        provider = self.providers["whatsapp"]
+        if provider is None:
+            raise ProviderNotConfigured(
+                "The WhatsApp provider and user authorization are not configured"
+            )
+        create_template = getattr(provider, "create_template", None)
+        if not callable(create_template):
+            raise ProviderNotConfigured(
+                "The configured WhatsApp provider cannot create message templates"
+            )
+        return create_template(
+            name,
+            language,
+            category,
+            body_text,
+            header_text=header_text,
+            footer_text=footer_text,
+        )
+
     def preview(self, draft_id: str) -> DraftPreview:
         row = self._get_draft(draft_id)
         if row["status"] in {"sending", "saving_provider_draft", "unknown"}:
@@ -234,6 +375,7 @@ class CommunicationService:
             }
             for item in attachment_records
         ]
+        template = self._template_record(row)
         canonical = "\0".join(
             (
                 row["channel"],
@@ -241,6 +383,7 @@ class CommunicationService:
                 row["subject"],
                 row["body"],
                 json.dumps(attachment_metadata, ensure_ascii=False, sort_keys=True),
+                json.dumps(template or {}, ensure_ascii=False, sort_keys=True),
             )
         )
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -252,6 +395,7 @@ class CommunicationService:
             body=row["body"],
             digest=digest,
             attachments=tuple(attachment_metadata),
+            template=template,
         )
 
     def send(
@@ -288,7 +432,19 @@ class CommunicationService:
                 self._audit(connection, draft_id, preview.channel, "approved", "sending")
 
         try:
-            if attachment_data:
+            if preview.template:
+                send_template = getattr(provider, "send_template", None)
+                if not callable(send_template):
+                    raise ProviderNotConfigured(
+                        "The configured WhatsApp provider cannot send message templates"
+                    )
+                external_id = send_template(
+                    preview.recipient,
+                    str(preview.template["name"]),
+                    str(preview.template["language"]),
+                    list(preview.template["body_parameters"]),
+                )
+            elif attachment_data:
                 external_id = provider.send(
                     preview.recipient,
                     preview.subject,
@@ -392,6 +548,33 @@ class CommunicationService:
         if row is None:
             raise KeyError("Communication draft not found")
         return row
+
+    @staticmethod
+    def _template_record(row: sqlite3.Row) -> dict[str, object] | None:
+        raw = row["template_json"] if "template_json" in row.keys() else "{}"
+        try:
+            record = json.loads(raw or "{}")
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ValueError("Draft template data is invalid") from error
+        if not isinstance(record, dict) or not record:
+            return None
+        name = record.get("name")
+        language = record.get("language")
+        parameters = record.get("body_parameters")
+        if (
+            not isinstance(name, str)
+            or not isinstance(language, str)
+            or not isinstance(parameters, list)
+            or not all(isinstance(value, str) for value in parameters)
+        ):
+            raise ValueError("Draft template data is invalid")
+        _validate_template_name(name)
+        _validate_template_language(language)
+        return {
+            "name": name,
+            "language": language,
+            "body_parameters": _validate_template_parameters(parameters),
+        }
 
     def _prepare_attachments(
         self,
@@ -1202,7 +1385,7 @@ class MicrosoftGraphEmailProvider:
 
 
 class WhatsAppCloudApiProvider:
-    """Send approved text drafts through Meta's WhatsApp Business Cloud API."""
+    """Send approved text/template drafts through Meta's WhatsApp Business Cloud API."""
 
     def __init__(
         self,
@@ -1210,16 +1393,20 @@ class WhatsAppCloudApiProvider:
         phone_number_id: str,
         *,
         api_version: str,
+        business_account_id: str | None = None,
         timeout: float = 20.0,
     ) -> None:
         if not re.fullmatch(r"\d{5,32}", phone_number_id):
             raise ValueError("WhatsApp Business phone number ID is invalid")
+        if business_account_id is not None and not re.fullmatch(r"\d{5,32}", business_account_id):
+            raise ValueError("WhatsApp Business account ID is invalid")
         if not re.fullmatch(r"v\d+\.\d+", api_version):
             raise ValueError("Graph API version must look like v27.0")
         if timeout <= 0:
             raise ValueError("timeout must be greater than zero")
         self.access_token = access_token
         self.phone_number_id = phone_number_id
+        self.business_account_id = business_account_id
         self.api_version = api_version
         self.timeout = timeout
 
@@ -1235,12 +1422,9 @@ class WhatsAppCloudApiProvider:
             raise ValueError("WhatsApp text messages do not accept an email subject")
         if attachments:
             raise ValueError("WhatsApp text messages do not support file attachments")
-        token = self.access_token()
-        if not token or "\r" in token or "\n" in token:
-            raise ProviderNotConfigured("WhatsApp Cloud API access token is not available")
         response = httpx.post(
             f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages",
-            headers={"Authorization": "Bearer " + token},
+            headers={"Authorization": "Bearer " + self._token()},
             json={
                 "messaging_product": "whatsapp",
                 "recipient_type": "individual",
@@ -1251,6 +1435,122 @@ class WhatsAppCloudApiProvider:
             timeout=self.timeout,
         )
         response.raise_for_status()
+        return self._message_id(response)
+
+    def send_template(
+        self,
+        recipient: str,
+        name: str,
+        language: str,
+        body_parameters: list[str] | tuple[str, ...] = (),
+    ) -> str:
+        """Send an approved template; required outside the customer-service window."""
+        name = _validate_template_name(name)
+        language = _validate_template_language(language)
+        parameters = _validate_template_parameters(body_parameters)
+        payload: dict[str, object] = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient.lstrip("+"),
+            "type": "template",
+            "template": {
+                "name": name,
+                "language": {"code": language},
+            },
+        }
+        if parameters:
+            payload["template"] = {
+                "name": name,
+                "language": {"code": language},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": value} for value in parameters
+                        ],
+                    }
+                ],
+            }
+        response = httpx.post(
+            f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages",
+            headers={"Authorization": "Bearer " + self._token()},
+            json=payload,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return self._message_id(response)
+
+    def create_template(
+        self,
+        name: str,
+        language: str,
+        category: str,
+        body_text: str,
+        *,
+        header_text: str | None = None,
+        footer_text: str | None = None,
+    ) -> dict[str, object]:
+        """Submit a message template to the configured WhatsApp business account."""
+        if self.business_account_id is None:
+            raise ProviderNotConfigured(
+                "WhatsApp Business account ID is not configured; set SHU_WHATSAPP_BUSINESS_ACCOUNT_ID"
+            )
+        name = _validate_template_name(name)
+        language = _validate_template_language(language)
+        category = category.strip().upper() if isinstance(category, str) else ""
+        if category not in _TEMPLATE_CATEGORIES:
+            raise ValueError("WhatsApp template category must be UTILITY, MARKETING or AUTHENTICATION")
+        if not isinstance(body_text, str) or not body_text.strip() or len(body_text) > 1024:
+            raise ValueError("WhatsApp template body must contain 1-1024 characters")
+        if header_text is not None and (
+            not header_text.strip() or len(header_text) > 60
+        ):
+            raise ValueError("WhatsApp template header must contain 1-60 characters")
+        if footer_text is not None and (
+            not footer_text.strip() or len(footer_text) > 60
+        ):
+            raise ValueError("WhatsApp template footer must contain 1-60 characters")
+        components: list[dict[str, object]] = []
+        if header_text is not None:
+            components.append(
+                {"type": "HEADER", "format": "TEXT", "text": header_text.strip()}
+            )
+        components.append({"type": "BODY", "text": body_text.strip()})
+        if footer_text is not None:
+            components.append({"type": "FOOTER", "text": footer_text.strip()})
+        response = httpx.post(
+            f"https://graph.facebook.com/{self.api_version}/{self.business_account_id}/message_templates",
+            headers={"Authorization": "Bearer " + self._token()},
+            json={
+                "name": name,
+                "language": language,
+                "category": category,
+                "components": components,
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError("WhatsApp Cloud API returned an invalid template response")
+        template_id = data.get("id")
+        status = data.get("status")
+        if not isinstance(template_id, str) or not template_id or not isinstance(status, str):
+            raise RuntimeError("WhatsApp Cloud API returned no template ID or status")
+        return {
+            "id": template_id,
+            "status": status,
+            "category": str(data.get("category", category)),
+        }
+
+    def _token(self) -> str:
+        token = self.access_token()
+        if not token or "\r" in token or "\n" in token:
+            raise ProviderNotConfigured("WhatsApp Cloud API access token is not available")
+        return token
+
+    @staticmethod
+    def _message_id(response: httpx.Response) -> str:
         try:
             message_id = response.json()["messages"][0]["id"]
         except (KeyError, IndexError, TypeError) as error:

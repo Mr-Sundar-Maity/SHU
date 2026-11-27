@@ -8,6 +8,8 @@ from app.cli import (
     communication_save_provider_draft,
     configure_console_encoding,
     communication_draft,
+    communication_template_create,
+    communication_template_draft,
     contacts_add,
     email_auth,
     email_related_action,
@@ -855,6 +857,81 @@ def test_whatsapp_draft_resolves_exact_contact_before_creating_draft(
         {"subject": "", "attachments": []},
     )
     assert "Resolved contact: Maya Das (+919876543210)" in capsys.readouterr().out
+
+
+def test_whatsapp_template_draft_renders_exact_body_and_resolves_contact(
+    monkeypatch, tmp_path, capsys
+):
+    database = Database(tmp_path / "shu.db")
+    database.initialize()
+    ContactBook(database).add("Maya Das", "+919876543210", confirmed=True)
+
+    class FakeService:
+        def __init__(self):
+            self.database = database
+            self.created = None
+
+        def create_template_draft(self, channel, recipient, name, language, parameters, body):
+            self.created = (channel, recipient, name, language, parameters, body)
+            return "template-draft-id"
+
+    service = FakeService()
+    monkeypatch.setattr("app.cli._communication_service", lambda: service)
+
+    assert (
+        communication_template_draft(
+            "maya das",
+            "order_ready",
+            "en_US",
+            ["Asha", "A-42"],
+            body_template="Hello {{1}}, order {{2}} is ready.",
+        )
+        == 0
+    )
+    assert service.created == (
+        "whatsapp",
+        "+919876543210",
+        "order_ready",
+        "en_US",
+        ["Asha", "A-42"],
+        "Hello Asha, order A-42 is ready.",
+    )
+    output = capsys.readouterr().out
+    assert "Resolved contact: Maya Das (+919876543210)" in output
+    assert "template-draft-id" in output
+
+
+def test_whatsapp_template_submission_requires_typed_confirmation(monkeypatch, capsys):
+    submitted = []
+
+    class FakeService:
+        def create_whatsapp_template(self, *args, **kwargs):
+            submitted.append((args, kwargs))
+            return {"id": "template-id", "status": "PENDING"}
+
+    monkeypatch.setattr("app.cli._communication_service", lambda: FakeService())
+    monkeypatch.setattr("builtins.input", lambda *_args: "no")
+
+    assert (
+        communication_template_create(
+            "order_ready", "en_US", "UTILITY", "Hello {{1}}"
+        )
+        == 2
+    )
+    assert submitted == []
+
+    monkeypatch.setattr("builtins.input", lambda *_args: "YES")
+    assert (
+        communication_template_create(
+            "order_ready", "en_US", "UTILITY", "Hello {{1}}"
+        )
+        == 0
+    )
+    assert submitted == [(
+        ("order_ready", "en_US", "UTILITY", "Hello {{1}}"),
+        {"header_text": None, "footer_text": None},
+    )]
+    assert "template-id" in capsys.readouterr().out
 
 
 def test_contacts_add_only_writes_after_typed_confirmation(monkeypatch, tmp_path):
