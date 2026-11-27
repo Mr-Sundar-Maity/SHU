@@ -6,8 +6,18 @@ packages and passing unit tests do not prove live hardware or account behavior.
 For a dated resume checkpoint and concise phase-by-phase remaining work, see
 [PROJECT_PROGRESS.md](PROJECT_PROGRESS.md).
 
-Latest checkpoint: 2026-11-27 r17. The full local suite passes 764 tests in
-98.36 seconds at schema v6. WhatsApp template support is complete on the coding
+Latest checkpoint: 2026-11-28 r18. The full local suite passes 792 tests in
+95.62 seconds at schema v6. The supplied React frontend is now the default
+desktop dashboard, connected to SHU through local Qt WebChannel. Its demo data
+and simulated actions are replaced by actual runtime state and native approved
+actions. Settings, advanced messaging, workflow editing and recovery controls
+remain available through native dialogs. Frontend TypeScript, 63 utility tests,
+production build and isolated rendered stop/resume checks pass. The supplied
+frontend README is unchanged. Node.js/npm and Qt Addons/WebEngine are now needed
+for the full desktop setup; the earlier exclusion of Qt Addons below is historical.
+Hardware voice, provider delivery and clean-machine acceptance remain open.
+
+At r17, WhatsApp template support was complete on the coding
 side: the Cloud API adapter can submit a template to the configured business
 account and send an approved template with ordered body parameters; the shared
 draft flow binds the rendered preview digest to the template name, language and

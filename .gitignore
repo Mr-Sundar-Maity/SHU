@@ -25,3 +25,7 @@ backups/
 
 .pytest_cache/
 .vscode/
+node_modules/
+frontend/.aistudio/
+frontend/public/assets/aistudio/
+frontend/bun.lock

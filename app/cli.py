@@ -1469,7 +1469,7 @@ def voice_chat(language: str | None, max_turns: int | None) -> int:
 
 def launch_gui() -> int:
     try:
-        from app.interface.dashboard import main as dashboard_main
+        from app.interface.frontend import main as dashboard_main
     except ModuleNotFoundError as error:
         if error.name not in {"PySide6", "docx", "openpyxl", "pptx", "apscheduler"}:
             raise

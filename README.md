@@ -3,7 +3,7 @@
 SHU is a local-first Windows voice assistant. The repository contains the
 voice and AI path plus the v1 foundations for approved memory, task execution,
 desktop tools, isolated public-page reading and form preparation, Office file generation, reminders,
-communications drafts, and a PySide6 dashboard. The project tracks hardware and
+communications drafts, and a React dashboard hosted by PySide6. The project tracks hardware and
 account prerequisites, acceptance evidence across all 19 phases, and the point
 where development should resume. [Delivery status](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/STATUS.md) · [PRD traceability](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/PRD_TRACEABILITY.md) · [Progress checkpoint](https://github.com/Mr-Sundar-Maity/SHU/blob/main/docs/PROJECT_PROGRESS.md)
 
@@ -15,6 +15,7 @@ for the verified implementation and current prerequisites.
 ## Requirements
 
 - Windows 10/11 and Python 3.11 (the PowerShell setup script creates `.venv`)
+- Node.js 22.12+ and npm for building the desktop dashboard
 - Ollama with the configured local model (default: `qwen2.5:1.5b`)
 - A microphone and speaker for live voice use
 - Microsoft Office for Office document generation
@@ -35,7 +36,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 ```
 
 The installer runs setup, creates `.venv` if needed, installs the pinned core and v1
-dependencies, installs Playwright Chromium, initializes/upgrades the SQLite
+dependencies, builds the frontend with npm, installs Playwright Chromium, initializes/upgrades the SQLite
 schema with a pre-migration backup, checks package consistency, and creates a
 current-user Start Menu shortcut. Use `-CoreOnly` for terminal chat and core
 tools without the desktop integrations. Core-only setup creates no shortcuts
@@ -102,6 +103,29 @@ Open the desktop dashboard:
 
 The direct command above uses the project environment even if it has not been
 activated in this PowerShell session.
+
+The default window now uses the UI from `frontend/`, connected directly to the
+existing Python runtime through Qt WebChannel. It reads actual SHU records and
+settings; empty stores stay empty. Demo conversations, contacts, metrics, weather
+and simulated actions are removed from the running interface. Weather and audio
+waveform telemetry are explicitly unavailable until integrated.
+
+After updating frontend source, rebuild it once:
+
+```powershell
+cd C:\SHU\frontend
+npm ci --ignore-scripts
+npm run build
+cd C:\SHU
+.\.venv\Scripts\python.exe -m app.cli gui
+```
+
+`npm run dev` is a design preview without a connected Python runtime. The desktop
+build needs no browser API key or HTTP bridge. The supplied `frontend/README.md`
+is preserved unchanged; use this root README for integrated SHU setup.
+Settings, task recovery, workflow editing, advanced messaging and sensitive
+approvals open the existing native SHU controls. Closing that controls window
+returns to the React dashboard; closing the dashboard shuts down the runtime.
 
 Ollama must be running on the local machine for chat and voice AI. If `doctor`
 reports the Ollama service unavailable, open Ollama or run `ollama serve` in a

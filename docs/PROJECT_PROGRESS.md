@@ -1,6 +1,6 @@
 # SHU PRD v1.0 Progress Checkpoint
 
-Updated: 2026-11-27 (Asia/Kolkata)
+Updated: 2026-11-28 (Asia/Kolkata)
 
 ## Goal and current checkpoint
 
@@ -10,7 +10,7 @@ existing implementation and records the newest verified state; it does not
 replace the requirement-level evidence in [PRD_TRACEABILITY.md](PRD_TRACEABILITY.md)
 or the delivery summary in [STATUS.md](STATUS.md).
 
-The latest full pytest run passed **764 tests in 98.36 seconds**. Python
+The latest full pytest run passed **792 tests in 95.62 seconds**. Python
 compilation passed. The configured database is at schema version 6 and reports
 `Integrity: ok`; its private-data ACL check passed. The r15 live checks remain
 current: Ollama answered a fixed synthetic prompt, Gmail passed read-only OAuth
@@ -20,7 +20,54 @@ microphone recording, template submission, external message or template send
 was performed. Doctor still warns only about the missing WhatsApp access token
 and trained `Hey SHU` model.
 
-## Current checkpoint on 2026-11-27 (r17, local)
+## Current checkpoint on 2026-11-28 (r18, frontend integration)
+
+- The supplied `frontend/` React dashboard is now the default `python -m
+  app.cli gui` window. A local Qt WebChannel connects it to the existing native
+  controller; no HTTP listener, browser speech recognition or frontend API key
+  is used. Existing data, credentials and the `qwen2.5:1.5b` configuration are
+  preserved. Remote dashboard resources and navigation outside the dashboard
+  document are blocked.
+- Demo records, simulated chat/actions, generated telemetry, fake weather and
+  browser-local conversation storage are removed from the running UI. Actual
+  memories, pending reminders, contacts, workflows, transcript and settings are
+  read from SHU. Unavailable weather/waveform/CPU metrics are labelled accordingly.
+  Themes remain local presentation choices. No execution progress is inferred
+  from a workflow's approval status.
+- Chat, planning, voice controls, emergency stop/resume, memory changes,
+  reminders, contact management and exact message previews use SHU services.
+  Sensitive actions retain native approval. Settings, workflow editing,
+  template composition, task queue/recovery and feedback use existing native
+  controls. Closing those controls hides them; closing the dashboard shuts
+  down the controller and waits for workers. Provider actions cannot bypass
+  disabled native controls or reuse an invalidated preview.
+- Full setup now builds the frontend with npm and installs pinned Qt Addons for
+  WebEngine. Source packages include the frontend source/lockfile and require
+  a build on installation. Git and bundles exclude node_modules, generated
+  dist output, AI Studio session artifacts and unused reference uploads. The
+  old unauthenticated prototype bridge entrypoint now launches SHU instead.
+- Verification: **792 Python tests passed in 95.62 s**, **63 frontend utility
+  tests passed**, TypeScript and production build passed, and `pip check`
+  passed. An isolated offscreen Qt render loaded actual runtime state; clicking
+  the rendered Emergency stop and Resume buttons changed the Python controller.
+  The screenshot was inspected. Offscreen GPU context warnings were observed;
+  this is not a hardware-accelerated rendering acceptance test. Vite reports a
+  non-fatal large-bundle warning (about 914 kB JS before gzip).
+- `frontend/README.md` was not edited. Its original SHA-256 remains
+  `dcd128fc9176bfa728c1887bcd7a690552c667c07d9c61f427b1fff018bef55d`.
+  Integrated startup/build instructions are in the root README instead.
+- Personal source bundle: `dist/SHU_personal_source_2026-11-28_r18.zip`, SHA-256
+  `5f6bf187d6fc88dd9095df1161fa96254d529d142f0a5ead368b5223bb5e83b2`.
+  Archive path, private-file, CRC and Python syntax checks passed. It contains
+  frontend source, not generated assets or a signed installer.
+- Resume here: check GitHub publication/CI, then remaining PRD acceptance work.
+  This UI change does not complete live microphone/speaker acceptance, trained
+  wake-word testing, WhatsApp credentials/consented delivery, Gemini availability
+  or clean-machine acceptance. No external message was sent and no microphone
+  was recorded during this checkpoint. Previous live provider results below
+  were not rechecked for this UI change.
+
+## Earlier checkpoint on 2026-11-27 (r17)
 
 - Phase 17 and Phase 11. The dashboard Communications tab now composes WhatsApp
 template drafts without the terminal. A **Message type** selector switches

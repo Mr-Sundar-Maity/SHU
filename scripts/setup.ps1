@@ -67,7 +67,17 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Installed packages have dependency conflicts.' }
 
     if (-not $CoreOnly) {
-        & $pythonPath -c 'from app.interface.dashboard import SHUDashboard'
+        if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+            throw 'Node.js/npm is required to build the SHU frontend. Install Node.js, then rerun setup.'
+        }
+        Push-Location (Join-Path $projectRoot 'frontend')
+        try {
+            & npm.cmd ci --ignore-scripts --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
+            & npm.cmd run build
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+        } finally { Pop-Location }
+        & $pythonPath -c 'from app.interface.frontend import FrontendWindow'
         if ($LASTEXITCODE -ne 0) { throw 'The dashboard could not load. Complete full setup before creating shortcuts.' }
     }
 

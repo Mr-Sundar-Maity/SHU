@@ -16,7 +16,7 @@ ROOT_FILES = (
     "requirements.txt",
     "requirements-v1.txt",
 )
-ROOT_DIRECTORIES = ("app", "database", "memory", "scripts", "tests")
+ROOT_DIRECTORIES = ("app", "database", "memory", "scripts", "tests", "frontend")
 DOC_FILES = ("THIRD_PARTY_LICENSES.csv",)
 REQUIRED_SETUP_FILES = {
     ".env.example",
@@ -29,9 +29,17 @@ REQUIRED_SETUP_FILES = {
     "app/cli.py",
     "app/config.py",
     "app/interface/dashboard.py",
+    "app/interface/frontend.py",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/index.html",
+    "frontend/src/main.tsx",
     "database/database.py",
 }
 EXCLUDED_PARTS = {
+    ".aistudio",
+    "aistudio",
+    "node_modules",
     ".git",
     ".venv",
     ".pytest_cache",
@@ -62,6 +70,8 @@ EXCLUDED_SUFFIXES = {
 def _is_private_or_generated(relative_path: PurePosixPath) -> bool:
     parts = [part.casefold() for part in relative_path.parts]
     filename = parts[-1]
+    if filename == "bun.lock":
+        return True
     if any(part in EXCLUDED_PARTS for part in parts):
         return True
     if filename == ".env" or (filename.startswith(".env.") and filename != ".env.example"):
