@@ -126,10 +126,18 @@ and SHA-256
 `d8aab2af457a9741330ff8feb2351aa51cd2e52966a6dc9c90e8121e099de275`; path,
 private-file, CRC and Python-syntax checks passed and all 189 members matched
 the checkout byte for byte.
-- This is a native-dialog accessibility check, not a screen-reader acceptance
-test and not a React-dashboard template-composer test. WhatsApp live
-submission/delivery remains blocked on the missing token, business account ID
-and consented recipient.
+- A separate headless-Chromium pass covered the React Communications view that
+launches that dialog. The inline React composer intentionally has **no**
+template fields; its "Open template composer and advanced communications
+controls" button is the template entry point. The pass confirmed that button is
+visible with that accessible name and activates on Enter (it emitted the
+expected no-desktop-runtime notice because no Qt bridge was attached), Channel,
+Recipient and Message labels resolve to their controls, and selecting WhatsApp
+disables Subject so it is skipped by Tab (Channel -> Recipient -> Message). No
+defect was found in the React entry point. The native dialog itself could not be
+opened from this browser-only pass, and this is not a screen-reader acceptance
+test. WhatsApp live submission/delivery remains blocked on the missing token,
+business account ID and consented recipient.
 
 ## Earlier checkpoint on 2026-11-27 (r17)
 

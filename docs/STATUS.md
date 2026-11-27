@@ -28,7 +28,11 @@ The r18d pass also fixed a native-dialog ordering defect: the template fields ha
 been created after the body row, so they appeared below the message box and were
 reached after it by Tab. They now precede the body in both layout and focus
 order, hidden fields are skipped, and the body's accessible name/description
-switch between "Message text" and "Template body" with the selected mode.
+switch between "Message text" and "Template body" with the selected mode. A
+headless-Chromium check of the React Communications view confirmed its template
+entry point is named and activates on Enter, and that WhatsApp mode disables and
+Tab-skips Subject; the React inline composer itself intentionally has no
+template fields.
 
 At r17, WhatsApp template support was complete on the coding
 side: the Cloud API adapter can submit a template to the configured business
