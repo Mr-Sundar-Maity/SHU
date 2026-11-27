@@ -29,7 +29,6 @@ export const HoloContextMenu: React.FC<HoloContextMenuProps> = ({
 }) => {
   const {
     isMuted,
-    quietMode,
     isListening,
     setActiveTab,
     clearLogs,
@@ -68,7 +67,7 @@ export const HoloContextMenu: React.FC<HoloContextMenuProps> = ({
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1440;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 900;
   const pos = clampContextMenuPosition(x, y, MENU_WIDTH, MENU_HEIGHT, vw, vh, 12);
-  const assistantMuted = isMuted && quietMode;
+  const assistantMuted = isMuted;
 
   const handleAction = (fn: () => void) => {
     fn();
@@ -99,7 +98,7 @@ export const HoloContextMenu: React.FC<HoloContextMenuProps> = ({
         className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-200 transition-colors hover:bg-sky-500/15 hover:text-sky-100 focus-visible:outline-2 focus-visible:outline-sky-400"
       >
         <Trash2 className="h-3.5 w-3.5 text-sky-300 shrink-0" aria-hidden="true" />
-        <span className="whitespace-nowrap">Clear Logs</span>
+        <span className="whitespace-nowrap">Reset conversation</span>
       </button>
 
       <button
@@ -114,7 +113,7 @@ export const HoloContextMenu: React.FC<HoloContextMenuProps> = ({
           <VolumeX className="h-3.5 w-3.5 text-amber-300 shrink-0" aria-hidden="true" />
         )}
         <span className="whitespace-nowrap">
-          {assistantMuted ? 'Unmute Assistant' : 'Mute Assistant'}
+          {assistantMuted ? 'Unmute microphone' : 'Mute microphone'}
         </span>
       </button>
 

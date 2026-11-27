@@ -537,7 +537,7 @@ export const AssistantView: React.FC = () => {
             ) : (
               <Volume2 className="h-3 w-3 text-sky-300" aria-hidden="true" />
             )}
-            <span>{quietMode ? 'Voice off' : 'Voice on'}</span>
+            <span>{quietMode ? 'Reminders silent' : 'Reminder audio on'}</span>
           </button>
         </div>
       </div>

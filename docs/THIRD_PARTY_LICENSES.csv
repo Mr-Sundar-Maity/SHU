@@ -2,31 +2,29 @@
 aiohappyeyeballs,2.7.1,PSF-2.0,OSI Approved :: Python Software Foundation License,aiohappyeyeballs-2.7.1.dist-info/licenses/LICENSE
 aiohttp,3.14.5,Apache-2.0 AND MIT,,aiohttp-3.14.5.dist-info/licenses/LICENSE.txt; aiohttp-3.14.5.dist-info/licenses/vendor/llhttp/LICENSE
 aiosignal,1.4.0,Apache 2.0,OSI Approved :: Apache Software License,aiosignal-1.4.0.dist-info/licenses/LICENSE
-annotated-doc,0.0.6,MIT,,annotated_doc-0.0.6.dist-info/licenses/LICENSE
 annotated-types,0.8.0,MIT,OSI Approved :: MIT License,annotated_types-0.8.0.dist-info/licenses/LICENSE
 anyio,4.16.0,MIT,,anyio-4.16.0.dist-info/licenses/LICENSE
 APScheduler,3.11.3,MIT,OSI Approved :: MIT License,apscheduler-3.11.3.dist-info/licenses/LICENSE.txt
 attrs,26.1.0,MIT,,attrs-26.1.0.dist-info/licenses/LICENSE
-av,18.1.0,BSD-3-Clause,,av-18.1.0.dist-info/licenses/LICENSE.txt
-certifi,2026.10.23,MPL-2.0,OSI Approved :: Mozilla Public License 2.0 (MPL 2.0),certifi-2026.10.23.dist-info/licenses/LICENSE
+av,18.1.1,BSD-3-Clause,,av-18.1.1.dist-info/licenses/LICENSE.txt
+certifi,2026.11.20,MPL-2.0,OSI Approved :: Mozilla Public License 2.0 (MPL 2.0),certifi-2026.11.20.dist-info/licenses/LICENSE
 cffi,2.1.1,MIT-0,,cffi-2.1.1.dist-info/licenses/LICENSE
-charset-normalizer,3.5.2,MIT,,charset_normalizer-3.5.2.dist-info/licenses/LICENSE
+charset-normalizer,3.5.3,MIT,,charset_normalizer-3.5.3.dist-info/licenses/LICENSE
 click,8.5.1,BSD-3-Clause,,click-8.5.1.dist-info/licenses/LICENSE.txt
-cloudpickle,3.1.2,BSD-3-Clause,OSI Approved :: BSD License,cloudpickle-3.1.2.dist-info/licenses/LICENSE
+cloudpickle,3.1.3,BSD-3-Clause,,cloudpickle-3.1.3.dist-info/licenses/LICENSE
 colorama,0.4.6,,OSI Approved :: BSD License,colorama-0.4.6.dist-info/licenses/LICENSE.txt
 comtypes,1.5.0,MIT,,comtypes-1.5.0.dist-info/licenses/LICENSE.txt
 cryptography,50.0.2,Apache-2.0 OR BSD-3-Clause,,cryptography-50.0.2.dist-info/licenses/LICENSE; cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE; cryptography-50.0.2.dist-info/licenses/LICENSE.BSD
-ctranslate2,4.9.0,MIT,,
+ctranslate2,4.9.1,MIT,,
 distro,1.9.0,"Apache License, Version 2.0",OSI Approved :: Apache Software License,distro-1.9.0.dist-info/LICENSE
 edge-tts,7.3.1,,OSI Approved :: GNU Lesser General Public License v3 (LGPLv3),edge_tts-7.3.1.dist-info/licenses/LICENSE
 et_xmlfile,2.0.0,MIT,OSI Approved :: MIT License,et_xmlfile-2.0.0.dist-info/LICENCE.python; et_xmlfile-2.0.0.dist-info/LICENCE.rst
-fastapi,0.163.1,MIT,,fastapi-0.163.1.dist-info/licenses/LICENSE
 faster-whisper,1.2.1,MIT,OSI Approved :: MIT License,faster_whisper-1.2.1.dist-info/LICENSE
-filelock,4.2.10,MIT,,filelock-4.2.10.dist-info/licenses/LICENSE
+filelock,4.3.1,MIT,,filelock-4.3.1.dist-info/licenses/LICENSE
 flatbuffers,25.12.19,Apache 2.0,OSI Approved :: Apache Software License,
 frozenlist,1.8.0,Apache-2.0,,frozenlist-1.8.0.dist-info/licenses/LICENSE
 fsspec,2026.9.0,BSD-3-Clause,,fsspec-2026.9.0.dist-info/licenses/LICENSE
-google-auth,2.62.2,Apache 2.0,OSI Approved :: Apache Software License,google_auth-2.62.2.dist-info/licenses/LICENSE
+google-auth,2.63.1,Apache 2.0,OSI Approved :: Apache Software License,google_auth-2.63.1.dist-info/licenses/LICENSE
 google-auth-oauthlib,1.5.0,Apache 2.0,OSI Approved :: Apache Software License,google_auth_oauthlib-1.5.0.dist-info/licenses/LICENSE
 google-genai,3.3.0,Apache-2.0,,google_genai-3.3.0.dist-info/licenses/LICENSE
 greenlet,3.5.6,MIT AND PSF-2.0,,greenlet-3.5.6.dist-info/licenses/LICENSE; greenlet-3.5.6.dist-info/licenses/LICENSE.PSF
@@ -36,22 +34,20 @@ httpcore,1.0.9,BSD-3-Clause,OSI Approved :: BSD License,httpcore-1.0.9.dist-info
 httpcore2,2.16.2,BSD-3-Clause,OSI Approved :: BSD License,httpcore2-2.16.2.dist-info/licenses/LICENSE.md
 httpx,0.28.1,BSD-3-Clause,OSI Approved :: BSD License,httpx-0.28.1.dist-info/licenses/LICENSE.md
 httpx2,2.16.2,BSD-3-Clause,OSI Approved :: BSD License,httpx2-2.16.2.dist-info/licenses/LICENSE.md
-huggingface_hub,2.4.0,Apache-2.0,OSI Approved :: Apache Software License,huggingface_hub-2.4.0.dist-info/licenses/LICENSE
+huggingface_hub,2.5.0,Apache-2.0,OSI Approved :: Apache Software License,huggingface_hub-2.5.0.dist-info/licenses/LICENSE
 idna,3.20,BSD-3-Clause,,idna-3.20.dist-info/licenses/LICENSE.md
 iniconfig,2.3.1,MIT,,iniconfig-2.3.1.dist-info/licenses/LICENSE
 joblib,1.6.0,BSD-3-Clause,,joblib-1.6.0.dist-info/licenses/LICENSE.txt
-lxml,6.1.3,BSD-3-Clause,,lxml-6.1.3.dist-info/licenses/LICENSE.txt; lxml-6.1.3.dist-info/licenses/LICENSES.txt
+lxml,6.2.0,BSD-3-Clause,,lxml-6.2.0.dist-info/licenses/LICENSE.txt; lxml-6.2.0.dist-info/licenses/LICENSES.txt
 msal,1.39.0,MIT,OSI Approved :: MIT License,msal-1.39.0.dist-info/LICENSE
 multidict,7.2.1,Apache-2.0,,multidict-7.2.1.dist-info/licenses/LICENSE
-narwhals,2.28.0,MIT,,narwhals-2.28.0.dist-info/licenses/LICENSE.md
+narwhals,2.29.0,MIT,,narwhals-2.29.0.dist-info/licenses/LICENSE.md
 numpy,2.4.6,BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0,,numpy-2.4.6.dist-info/licenses/LICENSE.txt; numpy-2.4.6.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt; numpy-2.4.6.dist-info/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING; numpy-2.4.6.dist-info/licenses/numpy/_core/src/highway/LICENSE; numpy-2.4.6.dist-info/licenses/numpy/_core/src/multiarray/dragon4_LICENSE.txt; numpy-2.4.6.dist-info/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md; numpy-2.4.6.dist-info/licenses/numpy/_core/src/umath/svml/LICENSE; numpy-2.4.6.dist-info/licenses/numpy/fft/pocketfft/LICENSE.md; numpy-2.4.6.dist-info/licenses/numpy/linalg/lapack_lite/LICENSE.txt; numpy-2.4.6.dist-info/licenses/numpy/ma/LICENSE; numpy-2.4.6.dist-info/licenses/numpy/random/LICENSE.md; numpy-2.4.6.dist-info/licenses/numpy/random/src/distributions/LICENSE.md; numpy-2.4.6.dist-info/licenses/numpy/random/src/mt19937/LICENSE.md; numpy-2.4.6.dist-info/licenses/numpy/random/src/pcg64/LICENSE.md; numpy-2.4.6.dist-info/licenses/numpy/random/src/philox/LICENSE.md; numpy-2.4.6.dist-info/licenses/numpy/random/src/sfc64/LICENSE.md; numpy-2.4.6.dist-info/licenses/numpy/random/src/splitmix64/LICENSE.md; numpy/_core/include/numpy/random/LICENSE.txt; numpy/ma/LICENSE; numpy/random/LICENSE.md
 oauthlib,4.0.1,BSD-3-Clause,,oauthlib-4.0.1.dist-info/licenses/LICENSE
 onnxruntime,1.32.0,MIT License,OSI Approved :: MIT License,onnxruntime/LICENSE; onnxruntime/ThirdPartyNotices.txt
-opencv-python,5.0.0.93,Apache 2.0,OSI Approved :: Apache Software License,cv2/LICENSE-3RD-PARTY.txt; cv2/LICENSE.txt; opencv_python-5.0.0.93.dist-info/LICENSE-3RD-PARTY.txt; opencv_python-5.0.0.93.dist-info/LICENSE.txt
 openpyxl,3.1.5,MIT,OSI Approved :: MIT License,openpyxl-3.1.5.dist-info/LICENCE.rst
-opentelemetry-api,1.45.2,Apache-2.0,,opentelemetry_api-1.45.2.dist-info/licenses/LICENSE
 openwakeword,0.6.0,,OSI Approved :: Apache Software License,openwakeword-0.6.0.dist-info/LICENSE
-packaging,26.3,Apache-2.0 OR BSD-2-Clause,,packaging-26.3.dist-info/licenses/LICENSE; packaging-26.3.dist-info/licenses/LICENSE.APACHE; packaging-26.3.dist-info/licenses/LICENSE.BSD
+packaging,26.4,Apache-2.0 OR BSD-2-Clause,,packaging-26.4.dist-info/licenses/LICENSE; packaging-26.4.dist-info/licenses/LICENSE.APACHE; packaging-26.4.dist-info/licenses/LICENSE.BSD
 pillow,13.0.0,MIT-CMU,,pillow-13.0.0.dist-info/licenses/LICENSE
 pip,24.0,MIT,OSI Approved :: MIT License,pip-24.0.dist-info/LICENSE.txt
 playwright,1.65.2,Apache-2.0,,playwright-1.65.2.dist-info/licenses/LICENSE; playwright/driver/LICENSE; playwright/driver/package/LICENSE; playwright/driver/package/NOTICE; playwright/driver/package/ThirdPartyNotices.txt; playwright/driver/package/lib/serverRegistry.js.LICENSE; playwright/driver/package/lib/utilsBundle.js.LICENSE; playwright/driver/package/lib/webp_codec.LICENSE
@@ -61,19 +57,21 @@ protobuf,7.36.2,3-Clause BSD License,,protobuf-7.36.2.dist-info/LICENSE
 pyasn1,0.6.5,BSD-2-Clause,,pyasn1-0.6.5.dist-info/licenses/LICENSE.rst
 pyasn1_modules,0.4.2,BSD,OSI Approved :: BSD License,pyasn1_modules-0.4.2.dist-info/licenses/LICENSE.txt
 pycparser,3.12,BSD-3-Clause,,pycparser-3.12.dist-info/licenses/LICENSE
-pydantic,2.14.3,MIT,,pydantic-2.14.3.dist-info/licenses/LICENSE
-pydantic_core,2.50.4,MIT,,pydantic_core-2.50.4.dist-info/licenses/LICENSE
+pydantic,2.14.4,MIT,,pydantic-2.14.4.dist-info/licenses/LICENSE
+pydantic_core,2.50.5,MIT,,pydantic_core-2.50.5.dist-info/licenses/LICENSE
 pygame,2.6.1,LGPL,OSI Approved :: GNU Library or Lesser General Public License (LGPL),
 Pygments,2.21.0,BSD-2-Clause,,pygments-2.21.0.dist-info/licenses/LICENSE
 PyJWT,2.15.1,MIT,,pyjwt-2.15.1.dist-info/licenses/LICENSE
+PySide6_Addons,6.12.0,LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only,,pyside6_addons-6.12.0.dist-info/licenses/LicenseRef-Qt-Commercial.txt
 PySide6_Essentials,6.12.0,LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only,,pyside6_essentials-6.12.0.dist-info/licenses/LicenseRef-Qt-Commercial.txt
+PySide6_WebEngine,6.12.0.140,LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only,,pyside6_webengine-6.12.0.140.dist-info/licenses/LicenseRef-Qt-Commercial.txt
 pytest,9.2.0,MIT,,pytest-9.2.0.dist-info/licenses/LICENSE
 python-docx,1.2.0,MIT,OSI Approved :: MIT License,python_docx-1.2.0.dist-info/licenses/LICENSE
 python-dotenv,1.2.4,BSD-3-Clause,,python_dotenv-1.2.4.dist-info/licenses/LICENSE
 python-pptx,1.0.2,MIT,OSI Approved :: MIT License,python_pptx-1.0.2.dist-info/LICENSE
 pywin32,312,PSF,OSI Approved :: Python Software Foundation License,adodbapi/license.txt; pythonwin/License.txt; pythonwin/Scintilla-License.txt; pythonwin/pywin/idle/LICENSE.txt; pywin32-312.dist-info/licenses/adodbapi/license.txt; pywin32-312.dist-info/licenses/com/License.txt; pywin32-312.dist-info/licenses/com/win32comext/mapi/src/MAPIStubLibrary/LICENSE; pywin32-312.dist-info/licenses/pythonwin/License.txt; pywin32-312.dist-info/licenses/pythonwin/Scintilla/License.txt; pywin32-312.dist-info/licenses/pythonwin/pywin/idle/LICENSE.txt; pywin32-312.dist-info/licenses/win32/License.txt; win32/License.txt; win32com/License.txt; win32comext/License.txt; win32comext/mapi/MAPIStubLibrary-License.txt; win32comext/mapi/NOTICE.md
 pywinauto,0.6.9,BSD 3-clause,OSI Approved :: BSD License,pywinauto-0.6.9.dist-info/LICENSE
-PyYAML,6.0.3,MIT,OSI Approved :: MIT License,pyyaml-6.0.3.dist-info/licenses/LICENSE
+PyYAML,6.0.4,MIT,OSI Approved :: MIT License,pyyaml-6.0.4.dist-info/licenses/LICENSE
 requests,2.34.2,Apache-2.0,OSI Approved :: Apache Software License,requests-2.34.2.dist-info/licenses/LICENSE; requests-2.34.2.dist-info/licenses/NOTICE
 requests-oauthlib,2.0.0,ISC,OSI Approved :: BSD License,requests_oauthlib-2.0.0.dist-info/LICENSE
 scikit-learn,1.9.1,BSD-3-Clause,,scikit_learn-1.9.1.dist-info/licenses/COPYING; sklearn/externals/array_api_compat/LICENSE; sklearn/externals/array_api_extra/LICENSE
@@ -995,7 +993,6 @@ six,1.17.0,MIT,OSI Approved :: MIT License,six-1.17.0.dist-info/LICENSE
 sniffio,1.3.1,MIT OR Apache-2.0,OSI Approved :: Apache Software License; OSI Approved :: MIT License,sniffio-1.3.1.dist-info/LICENSE; sniffio-1.3.1.dist-info/LICENSE.APACHE2; sniffio-1.3.1.dist-info/LICENSE.MIT
 sounddevice,0.5.6,MIT,,sounddevice-0.5.6.dist-info/licenses/LICENSE
 soundfile,0.14.0,BSD 3-Clause License,OSI Approved :: BSD License,_soundfile_data/COPYING; licensing/license_notes.md; soundfile-0.14.0.dist-info/LICENSE
-starlette,1.10.0,BSD-3-Clause,,starlette-1.10.0.dist-info/licenses/LICENSE.md
 tabulate,0.10.0,MIT,,tabulate-0.10.0.dist-info/licenses/LICENSE
 tenacity,9.1.4,Apache 2.0,OSI Approved :: Apache Software License,tenacity-9.1.4.dist-info/licenses/LICENSE
 threadpoolctl,3.8.0,BSD-3-Clause,,threadpoolctl-3.8.0.dist-info/licenses/LICENSE
@@ -1008,5 +1005,5 @@ tzdata,2026.6,Apache-2.0,,tzdata-2026.6.dist-info/licenses/LICENSE; tzdata-2026.
 tzlocal,5.4.5,MIT,,tzlocal-5.4.5.dist-info/licenses/LICENSE.txt
 urllib3,2.8.0,MIT,,urllib3-2.8.0.dist-info/licenses/LICENSE.txt
 websockets,17.4,BSD-3-Clause,,websockets-17.4.dist-info/licenses/LICENSE
-xlsxwriter,3.3.1,BSD-2-Clause,,xlsxwriter-3.3.1.dist-info/licenses/LICENSE.txt
+xlsxwriter,3.3.4,BSD-2-Clause,,xlsxwriter-3.3.4.dist-info/licenses/LICENSE.txt
 yarl,1.25.1,Apache-2.0,,yarl-1.25.1.dist-info/licenses/LICENSE; yarl-1.25.1.dist-info/licenses/NOTICE

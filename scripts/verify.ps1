@@ -17,6 +17,19 @@ try {
     & $pythonPath -m pytest -q
     if ($LASTEXITCODE -ne 0) { throw 'The SHU test suite failed.' }
 
+    if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+        throw 'Node.js/npm is required for dashboard verification. Run full setup first.'
+    }
+    Push-Location (Join-Path $projectRoot 'frontend')
+    try {
+        & npm.cmd run lint
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend TypeScript verification failed.' }
+        & npm.cmd test
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed.' }
+        & npm.cmd run build
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend production build failed.' }
+    } finally { Pop-Location }
+
     & $pythonPath -m app.cli db verify
     if ($LASTEXITCODE -ne 0) { throw 'SQLite integrity or schema verification failed.' }
 
