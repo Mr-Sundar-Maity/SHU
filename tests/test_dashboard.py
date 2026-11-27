@@ -1360,6 +1360,113 @@ def test_dashboard_resolves_local_whatsapp_contact_before_preview(tmp_path):
     assert app is not None
 
 
+def test_dashboard_creates_whatsapp_template_draft_with_rendered_preview(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    try:
+        window.contacts.add("Maya Das", "+919876543210", confirmed=True)
+        service = CommunicationService(window.database)
+        window._communications = service
+        window.message_channel.setCurrentIndex(
+            window.message_channel.findData("whatsapp")
+        )
+        window.message_type.setCurrentIndex(window.message_type.findData("template"))
+        window.message_recipient.setText("maya das")
+        window.template_name.setText("order_ready")
+        window.template_language.setText("en_US")
+        window.template_parameters.setText("Asha, A-42")
+        window.message_body.setPlainText("Hello {{1}}, order {{2}} is ready.")
+
+        window._create_message_draft()
+
+        preview = service.preview(window._active_message_draft_id)
+        assert preview.template == {
+            "name": "order_ready",
+            "language": "en_US",
+            "body_parameters": ["Asha", "A-42"],
+        }
+        assert preview.body == "Hello Asha, order A-42 is ready."
+        details = window.message_preview.toPlainText()
+        assert "Template: order_ready (en_US)" in details
+        assert "Asha" in details and "A-42" in details
+        assert window.send_message_button.isEnabled()
+    finally:
+        window.close()
+    assert app is not None
+
+
+def test_dashboard_template_send_binds_reviewed_template_and_parameters(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+
+    class FakeWhatsApp:
+        def __init__(self):
+            self.calls = []
+
+        def send_template(self, recipient, name, language, parameters):
+            self.calls.append((recipient, name, language, list(parameters)))
+            return "wamid.dashboard"
+
+    provider = FakeWhatsApp()
+    service = CommunicationService(window.database, whatsapp_provider=provider)
+    window._communications = service
+    draft = service.create_template_draft(
+        "whatsapp",
+        "+919876543210",
+        "order_ready",
+        "en_US",
+        ["Asha"],
+        "Hello Asha",
+    )
+    digest = service.preview(draft).digest
+    window._active_message_draft_id = draft
+    window._active_message_digest = digest
+    window._active_message_contact_name = "Maya Das"
+    workers = []
+    window._run_worker = lambda worker, _callback: workers.append(worker)
+
+    def confirm(dialog):
+        text = dialog.text()
+        assert "Template: order_ready (en_US)" in text
+        assert "Asha" in text
+        assert dialog.defaultButton() is dialog.button(QMessageBox.StandardButton.No)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "exec", confirm)
+    try:
+        window._send_message_draft()
+        assert len(workers) == 1
+        assert isinstance(workers[0], _CommunicationSendWorker)
+        assert (workers[0].draft_id, workers[0].digest) == (draft, digest)
+        assert provider.calls == []
+    finally:
+        window.close()
+    assert app is not None
+
+
+def test_dashboard_template_fields_follow_channel_and_message_type(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))
+    try:
+        assert window.message_type.isHidden()
+        window.message_channel.setCurrentIndex(
+            window.message_channel.findData("whatsapp")
+        )
+        assert not window.message_type.isHidden()
+        assert window.template_name.isHidden()
+        window.message_type.setCurrentIndex(window.message_type.findData("template"))
+        assert not window.template_name.isHidden()
+        assert not window.template_language.isHidden()
+        assert not window.template_parameters.isHidden()
+        window.message_type.setCurrentIndex(window.message_type.findData("text"))
+        assert window.template_name.isHidden()
+        window.message_channel.setCurrentIndex(window.message_channel.findData("email"))
+        assert window.message_type.isHidden()
+    finally:
+        window.close()
+    assert app is not None
+
+
 @pytest.mark.parametrize(
     ("operation", "worker_type"),
     [("_save_provider_email_draft", _ProviderDraftWorker), ("_send_message_draft", _CommunicationSendWorker)],

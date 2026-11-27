@@ -504,7 +504,10 @@ WhatsApp recipient names are resolved only by exact match from SHU's private
 local contact book. Duplicate names require a numbered choice; unknown names are
 never guessed. The dashboard's Communications tab also manages this contact
 book, then provides the same local-draft, exact-preview, and explicit-send-
-confirmation flow without attachments. Provider-accepted sends produce a
+confirmation flow without attachments. For WhatsApp it can compose either a
+text message or a template message; template mode adds accessible fields for
+the approved template name, language, comma-separated ordered parameters and
+the placeholder body, and the preview shows the rendered text before review. Provider-accepted sends produce a
 dashboard status update and a Windows tray notice when the tray is available.
 
 ```powershell

@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 from app.ai.ai_engine import SHUAIEngine
 from app.applications.office import OfficeDocumentService
 from app.applications.browser import BrowserReader, register_safe_browser_tools
+from app.applications.communications import render_whatsapp_template
 from app.applications.contacts import (
     AmbiguousContactError,
     ContactBook,
@@ -597,6 +598,12 @@ class SHUDashboard(QMainWindow):
         self.message_channel.addItem("Email", "email")
         self.message_channel.addItem("WhatsApp Business", "whatsapp")
         self.comms_form.addRow("Channel", self.message_channel)
+        self.message_type = QComboBox()
+        self.message_type.setAccessibleName("WhatsApp message type")
+        self.message_type.addItem("Text message", "text")
+        self.message_type.addItem("Template message", "template")
+        self.comms_form.addRow("Message type", self.message_type)
+        self.message_type_label = self.comms_form.labelForField(self.message_type)
         self.message_recipient = QLineEdit()
         self.message_recipient.setAccessibleName("Message recipient")
         self.message_recipient.setPlaceholderText("Email address or +E.164 phone number")
@@ -610,6 +617,26 @@ class SHUDashboard(QMainWindow):
         self.message_body.setPlaceholderText("Message text")
         self.comms_form.addRow("Message", self.message_body)
         self.message_subject_label = self.comms_form.labelForField(self.message_subject)
+        self.template_name = QLineEdit()
+        self.template_name.setAccessibleName("WhatsApp template name")
+        self.template_name.setPlaceholderText("Approved template name, for example order_ready")
+        self.comms_form.addRow("Template name", self.template_name)
+        self.template_name_label = self.comms_form.labelForField(self.template_name)
+        self.template_language = QLineEdit("en_US")
+        self.template_language.setAccessibleName("WhatsApp template language")
+        self.template_language.setPlaceholderText("en_US")
+        self.comms_form.addRow("Template language", self.template_language)
+        self.template_language_label = self.comms_form.labelForField(self.template_language)
+        self.template_parameters = QLineEdit()
+        self.template_parameters.setAccessibleName("WhatsApp template body parameters")
+        self.template_parameters.setPlaceholderText(
+            "Comma-separated values in order, for example Asha, A-42"
+        )
+        self.comms_form.addRow("Template parameters", self.template_parameters)
+        self.template_parameters_label = self.comms_form.labelForField(
+            self.template_parameters
+        )
+        self.message_body_label = self.comms_form.labelForField(self.message_body)
         layout.addLayout(self.comms_form)
         buttons = QHBoxLayout()
         self.create_message_button = QPushButton("Create and preview draft")
@@ -634,8 +661,12 @@ class SHUDashboard(QMainWindow):
         layout.addWidget(self.manage_contacts_button)
 
         self.message_channel.currentIndexChanged.connect(self._message_channel_changed)
+        self.message_type.currentIndexChanged.connect(self._message_type_changed)
         self.message_recipient.textChanged.connect(self._invalidate_message_preview)
         self.message_subject.textChanged.connect(self._invalidate_message_preview)
+        self.template_name.textChanged.connect(self._invalidate_message_preview)
+        self.template_language.textChanged.connect(self._invalidate_message_preview)
+        self.template_parameters.textChanged.connect(self._invalidate_message_preview)
         self.message_body.textChanged.connect(self._invalidate_message_preview)
         self._message_channel_changed()
         return tab
@@ -732,9 +763,40 @@ class SHUDashboard(QMainWindow):
 
     def _message_channel_changed(self) -> None:
         is_email = self.message_channel.currentData() == "email"
+        is_whatsapp = self.message_channel.currentData() == "whatsapp"
         self.message_subject.setVisible(is_email)
         if self.message_subject_label is not None:
             self.message_subject_label.setVisible(is_email)
+        self.message_type.setVisible(is_whatsapp)
+        if self.message_type_label is not None:
+            self.message_type_label.setVisible(is_whatsapp)
+        self._message_type_changed()
+
+    def _message_type_changed(self) -> None:
+        is_template = (
+            self.message_channel.currentData() == "whatsapp"
+            and self.message_type.currentData() == "template"
+        )
+        for widget in (
+            self.template_name,
+            self.template_language,
+            self.template_parameters,
+        ):
+            widget.setVisible(is_template)
+        for label in (
+            self.template_name_label,
+            self.template_language_label,
+            self.template_parameters_label,
+        ):
+            if label is not None:
+                label.setVisible(is_template)
+        if self.message_body_label is not None:
+            self.message_body_label.setText("Template body" if is_template else "Message")
+        self.message_body.setPlaceholderText(
+            "Template text with numbered placeholders, for example Hello {{1}}"
+            if is_template
+            else "Message text"
+        )
         self._invalidate_message_preview()
 
     def _resolve_dashboard_contact(self, recipient: str) -> ContactRecord | None:
@@ -871,8 +933,12 @@ class SHUDashboard(QMainWindow):
     def _set_communication_inputs_enabled(self, enabled: bool) -> None:
         for widget in (
             self.message_channel,
+            self.message_type,
             self.message_recipient,
             self.message_subject,
+            self.template_name,
+            self.template_language,
+            self.template_parameters,
             self.message_body,
             self.create_message_button,
         ):
@@ -888,11 +954,32 @@ class SHUDashboard(QMainWindow):
     def _create_message_draft(self) -> None:
         channel = self.message_channel.currentData()
         recipient = self.message_recipient.text().strip()
+        template_mode = channel == "whatsapp" and self.message_type.currentData() == "template"
         body = self.message_body.toPlainText().strip()
         subject = self.message_subject.text().strip() if channel == "email" else ""
+        template_name = self.template_name.text().strip() if template_mode else ""
+        template_language = (
+            self.template_language.text().strip() or "en_US"
+        ) if template_mode else ""
+        template_parameters = (
+            [value.strip() for value in self.template_parameters.text().split(",") if value.strip()]
+            if template_mode
+            else []
+        )
         if not recipient or not body:
             QMessageBox.information(self, "Draft needs details", "Enter a recipient and message text.")
             return
+        if template_mode and not template_name:
+            QMessageBox.information(
+                self, "Template needs a name", "Enter the approved WhatsApp template name."
+            )
+            return
+        if template_mode:
+            try:
+                body = render_whatsapp_template(body, template_parameters)
+            except ValueError as error:
+                QMessageBox.warning(self, "Template preview invalid", str(error))
+                return
         contact_name = None
         if channel == "whatsapp":
             contact = self._resolve_dashboard_contact(recipient)
@@ -903,12 +990,22 @@ class SHUDashboard(QMainWindow):
             self.message_recipient.setText(recipient)
         try:
             service = self._communication_service()
-            draft_id = service.create_draft(
-                channel,
-                recipient,
-                body,
-                subject=subject,
-            )
+            if template_mode:
+                draft_id = service.create_template_draft(
+                    channel,
+                    recipient,
+                    template_name,
+                    template_language,
+                    template_parameters,
+                    body,
+                )
+            else:
+                draft_id = service.create_draft(
+                    channel,
+                    recipient,
+                    body,
+                    subject=subject,
+                )
             preview = service.preview(draft_id)
         except Exception as error:
             QMessageBox.warning(self, "Draft not created", type(error).__name__ + ": " + str(error))
@@ -928,6 +1025,15 @@ class SHUDashboard(QMainWindow):
         ]
         if preview.subject:
             details.append(f"Subject: {preview.subject}")
+        if preview.template:
+            details.append(
+                f"Template: {preview.template['name']} ({preview.template['language']})"
+            )
+            parameters = preview.template["body_parameters"]
+            if parameters:
+                details.append(
+                    "Template parameters: " + json.dumps(parameters, ensure_ascii=False)
+                )
         details.extend(("", preview.body, "", f"Approval digest: {preview.digest}"))
         self.message_preview.setPlainText("\n".join(details))
         self.save_provider_draft_button.setEnabled(channel == "email")
@@ -1005,6 +1111,18 @@ class SHUDashboard(QMainWindow):
                 else f"{preview.recipient}\n"
             )
             + (f"Subject: {preview.subject}\n" if preview.subject else "")
+            + (
+                f"Template: {preview.template['name']} ({preview.template['language']})\n"
+                if preview.template
+                else ""
+            )
+            + (
+                "Template parameters: "
+                + json.dumps(preview.template["body_parameters"], ensure_ascii=False)
+                + "\n"
+                if preview.template and preview.template["body_parameters"]
+                else ""
+            )
             + f"\n{preview.body}"
             + ("\n\nAttachments:\n" + json.dumps(preview.attachments, ensure_ascii=False, indent=2)
                if preview.attachments else "")
