@@ -1395,6 +1395,92 @@ def test_dashboard_creates_whatsapp_template_draft_with_rendered_preview(tmp_pat
     assert app is not None
 
 
+def test_dashboard_template_fields_keyboard_and_accessibility(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = SHUDashboard(
+        Settings.from_env(
+            {"SHU_DATA_DIR": str(tmp_path), "SHU_MICROPHONE_DEVICE": ""}
+        )
+    )
+    try:
+        window.show()
+        window.activateWindow()
+        window.tabs.setCurrentIndex(3)
+        window.message_channel.setCurrentIndex(
+            window.message_channel.findData("whatsapp")
+        )
+        window.message_type.setCurrentIndex(window.message_type.findData("template"))
+        app.processEvents()
+
+        expected = (
+            (window.message_type, "Message type", "WhatsApp message type", "approved"),
+            (window.template_name, "Template name", "WhatsApp template name", "approved"),
+            (window.template_language, "Template language", "WhatsApp template language", "en_US"),
+            (
+                window.template_parameters,
+                "Template parameters",
+                "WhatsApp template body parameters",
+                "numbered placeholders",
+            ),
+            (window.message_body, "Template body", "Template body", "numbered placeholders"),
+        )
+        for widget, label_text, accessible_name, description in expected:
+            label = window.comms_form.labelForField(widget)
+            assert label is not None
+            assert label.text() == label_text
+            assert label.buddy() is widget
+            assert widget.accessibleName() == accessible_name
+            assert description in widget.accessibleDescription()
+
+        template_rows = [
+            window.comms_form.getWidgetPosition(widget)[0]
+            for widget in (
+                window.template_name,
+                window.template_language,
+                window.template_parameters,
+                window.message_body,
+            )
+        ]
+        assert template_rows == sorted(template_rows)
+
+        window.message_channel.setFocus()
+        app.processEvents()
+        assert app.focusWidget() is window.message_channel
+        for expected_widget in (
+            window.message_type,
+            window.message_recipient,
+            window.template_name,
+            window.template_language,
+            window.template_parameters,
+            window.message_body,
+        ):
+            QTest.keyClick(app.focusWidget(), Qt.Key.Key_Tab)
+            app.processEvents()
+            assert app.focusWidget() is expected_widget
+
+        window.template_name.setFocus()
+        QTest.keyClicks(window.template_name, "order_ready")
+        assert window.template_name.text() == "order_ready"
+
+        window.message_type.setCurrentIndex(window.message_type.findData("text"))
+        app.processEvents()
+        assert window.message_body.accessibleName() == "Message text"
+        window.message_recipient.setFocus()
+        QTest.keyClick(window.message_recipient, Qt.Key.Key_Tab)
+        app.processEvents()
+        assert app.focusWidget() is window.message_body
+
+        window.message_channel.setCurrentIndex(window.message_channel.findData("email"))
+        app.processEvents()
+        window.message_channel.setFocus()
+        QTest.keyClick(window.message_channel, Qt.Key.Key_Tab)
+        app.processEvents()
+        assert app.focusWidget() is window.message_recipient
+    finally:
+        window.close()
+    assert app is not None
+
+
 def test_dashboard_template_send_binds_reviewed_template_and_parameters(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = SHUDashboard(Settings.from_env({"SHU_DATA_DIR": str(tmp_path)}))

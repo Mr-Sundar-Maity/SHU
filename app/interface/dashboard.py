@@ -600,6 +600,9 @@ class SHUDashboard(QMainWindow):
         self.comms_form.addRow("Channel", self.message_channel)
         self.message_type = QComboBox()
         self.message_type.setAccessibleName("WhatsApp message type")
+        self.message_type.setAccessibleDescription(
+            "Choose a plain text message or an approved WhatsApp template."
+        )
         self.message_type.addItem("Text message", "text")
         self.message_type.addItem("Template message", "template")
         self.comms_form.addRow("Message type", self.message_type)
@@ -612,23 +615,26 @@ class SHUDashboard(QMainWindow):
         self.message_subject.setAccessibleName("Email subject")
         self.message_subject.setPlaceholderText("Email subject")
         self.comms_form.addRow("Subject", self.message_subject)
-        self.message_body = QTextEdit()
-        self.message_body.setAccessibleName("Message text")
-        self.message_body.setPlaceholderText("Message text")
-        self.comms_form.addRow("Message", self.message_body)
         self.message_subject_label = self.comms_form.labelForField(self.message_subject)
         self.template_name = QLineEdit()
         self.template_name.setAccessibleName("WhatsApp template name")
+        self.template_name.setAccessibleDescription(
+            "Must match a template approved for the configured WhatsApp business account."
+        )
         self.template_name.setPlaceholderText("Approved template name, for example order_ready")
         self.comms_form.addRow("Template name", self.template_name)
         self.template_name_label = self.comms_form.labelForField(self.template_name)
         self.template_language = QLineEdit("en_US")
         self.template_language.setAccessibleName("WhatsApp template language")
+        self.template_language.setAccessibleDescription("Meta locale code such as en_US.")
         self.template_language.setPlaceholderText("en_US")
         self.comms_form.addRow("Template language", self.template_language)
         self.template_language_label = self.comms_form.labelForField(self.template_language)
         self.template_parameters = QLineEdit()
         self.template_parameters.setAccessibleName("WhatsApp template body parameters")
+        self.template_parameters.setAccessibleDescription(
+            "Values replace numbered placeholders in order."
+        )
         self.template_parameters.setPlaceholderText(
             "Comma-separated values in order, for example Asha, A-42"
         )
@@ -636,6 +642,11 @@ class SHUDashboard(QMainWindow):
         self.template_parameters_label = self.comms_form.labelForField(
             self.template_parameters
         )
+        self.message_body = QTextEdit()
+        self.message_body.setAccessibleName("Message text")
+        self.message_body.setAccessibleDescription("Plain message text.")
+        self.message_body.setPlaceholderText("Message text")
+        self.comms_form.addRow("Message", self.message_body)
         self.message_body_label = self.comms_form.labelForField(self.message_body)
         layout.addLayout(self.comms_form)
         buttons = QHBoxLayout()
@@ -792,6 +803,12 @@ class SHUDashboard(QMainWindow):
                 label.setVisible(is_template)
         if self.message_body_label is not None:
             self.message_body_label.setText("Template body" if is_template else "Message")
+        self.message_body.setAccessibleName("Template body" if is_template else "Message text")
+        self.message_body.setAccessibleDescription(
+            "Template text; numbered placeholders are replaced in order by the template parameters."
+            if is_template
+            else "Plain message text."
+        )
         self.message_body.setPlaceholderText(
             "Template text with numbered placeholders, for example Hello {{1}}"
             if is_template
