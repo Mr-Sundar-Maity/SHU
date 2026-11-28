@@ -11,8 +11,8 @@ replace the requirement-level evidence in [PRD_TRACEABILITY.md](PRD_TRACEABILITY
 or the delivery summary in [STATUS.md](STATUS.md).
 
 The latest clean-environment pytest run passed **794 tests in 104.82 seconds**;
-the current worktree, including the r18e voice controls, passes **803
-tests in 98.44 seconds**. Python compilation passed. The configured database is at schema version 6 and reports
+the current worktree, including the r18f resource display, passes **816
+tests in 78.14 seconds**. Python compilation passed. The configured database is at schema version 6 and reports
 `Integrity: ok`; its private-data ACL check passed. The r15 live checks remain
 current: Ollama answered a fixed synthetic prompt, Gmail passed read-only OAuth
 verification, and direct Gemini generation still returned HTTP 503 after 75.078
@@ -21,7 +21,37 @@ microphone recording, template submission, external message or template send
 was performed. Doctor still warns only about the missing WhatsApp access token
 and trained `Hey SHU` model.
 
-## Current checkpoint on 2026-11-28 (r18, frontend integration)
+## Latest checkpoint on 2026-11-28 (r18f, actual dashboard resources)
+
+- Continued from published `974c5af`; existing frontend, voice controls and
+  provider/security behavior were preserved. The Runtime status card now shows
+  measured whole-system CPU, physical RAM used/total and SHU data-volume free
+  space. These are host measurements, not per-process SHU usage or capacity estimates.
+- Windows CPU/RAM probes are shared with the existing local-AI benchmark.
+  Dashboard sampling is cached for two seconds. CPU requires two valid samples;
+  unavailable probes clear stale readings and render `Unavailable`. Unknown or
+  more-than-64-processor hosts omit CPU rather than mislabel one processor group.
+  Disk polling is restricted to local fixed drives; no dependency was added.
+- Verification: **816 Python tests passed in 78.14 seconds**, **63 frontend
+  tests passed**, TypeScript and production build passed, and application Python
+  syntax passed. The earlier clean-environment result remains 794; this change
+  did not repeat installation. An isolated real Qt WebChannel render displayed
+  actual Windows CPU/RAM/disk values, and its screenshot was inspected. No
+  microphone, provider request or external message was used. Sandbox subprocess
+  restrictions required rerunning Node tests and Qt rendering with approved
+  execution. Offscreen GPU warnings and the existing Vite bundle-size warning
+  remain; neither establishes hardware GPU acceptance.
+- New personal source archive: `dist/SHU_personal_source_2026-11-28_r18f.zip`,
+  191 entries, 487,481 bytes, SHA-256
+  `5541d33a75df7cc710401f9e556d27023a94517753f854d5dca6243451b88ec9`.
+  Path/private-file/CRC/Python-syntax checks and byte-for-byte source comparison
+  passed. Previous archives remain. `frontend/README.md` retains its original
+  SHA-256 recorded below.
+- Resume after this checkpoint: complete the external and target-hardware
+  acceptance listed in the phase rows. The 19-phase v1 acceptance remains open;
+  this host's measurements do not establish the exact 16 GB target baseline.
+
+## Earlier checkpoint on 2026-11-28 (r18, frontend integration)
 
 - The supplied `frontend/` React dashboard is now the default `python -m
   app.cli gui` window. A local Qt WebChannel connects it to the existing native
@@ -867,8 +897,8 @@ this as live acceptance or v1.0 completion.
 | 15. Task planner | Validation, FIFO queue, checkpoints, approval binding and crash recovery implemented; duration estimates use measured medians after three successful samples; registered read-only tools can use up to two transient-only retries with exponential backoff and an interruptible emergency-stop wait; local-Qwen plan-to-isolated-queue/preview smoke passed with cloud and automation disabled; isolated read-only `list_windows` target execution completed and drained the FIFO queue, with titles/results suppressed; focused retry/browser/stop suite passes 81 tests. Crash recovery prioritizes persisted in-flight state and resume claims bind the verified checkpoint. Subprocess and concurrent resume regressions pass. Resume and recovery approvals now bind the complete reviewed snapshot to the SQLite write. New Windows runner claims persist the process creation time so reused PIDs cannot prevent recovery. Legacy and unreadable live identities retain manual uncertainty. | Registered resource labels identify required tool capabilities and aggregate per task; they do not claim live CPU/RAM capacity. Modifying target-app workflows and physical power-loss recovery remain. |
 | 16. Email | Gmail OAuth, search/read and confirmed draft/send paths implemented. CLI reply and forward approvals bind the recipient, subject and delivery mode. Changes are rejected before a provider write. Outlook reply tests check one reviewed To address and empty Cc/Bcc on the returned draft before send. Dashboard send and provider-draft dialogs display literal text and attachment details and decline stale approval. Provider-draft saves and direct sends now require a usable provider reference and block replay of uncertain actions. Provider-native replies and forwards now commit an approval claim before a write and block identical retries after confirmed or uncertain outcomes. | Broader Gmail reply/forward/attachment/send acceptance; Outlook registration/consent remains unverified. The verified draft routing still requires a live Outlook acceptance check. |
 | 17. Dashboard | Voice, task, memory, reminder, communication (text and WhatsApp template composition), Cloud AI and automation controls implemented, including six response-style modes and a post-session voice request planner handoff with exact-step preview and approval; dashboard text size is adjustable from 8–24 points. The conversation transcript displays literal text and line breaks. Voice stop and queued Quiet mode have offscreen regression coverage. Offscreen shutdown tests confirm responsive closing with two active Qt workers and no new work. Offscreen tests verify time zone persistence and exact, plain-text communication confirmations. A labelled Voice activity line distinguishes capture, processing and speech output and preserves the mute indicator. The SHU menu can create a verified SQLite backup on a worker thread without rotating earlier backups. The reminder list surfaces uncertain delivery separately from pending and permits explicit rescheduling. Dashboard Emergency Stop cancels the active chat and suppresses a late response. A fresh request has independent cancellation. Offscreen workflow controls passed a five-dialog keyboard test using one synthetic task. | Target-desktop keyboard/screen-reader acceptance and full interactive/provider acceptance remain. |
-| 18. Hardening | Latest full pytest run: 803 tests in 98.44 seconds in the current worktree (794 in the latest clean environment); compilation passes; the migrated database reports schema v6. The 2026-11-27 Doctor recheck reported only the missing WhatsApp token and trained wake model. Local Qwen benchmark/soak reports Ollama timings, model footprint, SHU data-volume free space, CPU/RAM and latency; a FIFO gate prevents Ollama and Whisper CPU overlap | Target-device RAM headroom, full hardware voice path, wake-word acceptance, complete threat-model run and physical power-loss test remain. |
-| 19. Release | Setup/startup/recovery tooling and a checked 2026-11-28 r18e personal source ZIP exist: 189 entries, 484,260 bytes, SHA-256 `a7da95adb38ca842f31d6c8812fe1a35686323a810b69d26d89e4eecdc52065c`, path/private-file/CRC/Python-syntax checks and byte-for-byte member comparison. The manifests pin 25 direct runtime dependencies; the r15 fresh venv and extracted source passed pip check, isolated schema-v5 init/verify, 747 tests in 95.68 seconds, a managed-browser smoke and offscreen dashboard launch. The corrected r18c extraction passed clean-environment tests and desktop/browser launch checks on this host. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain; hosted CI is still blocked by the account billing restriction. |
+| 18. Hardening | Latest full pytest run: 816 tests in 78.14 seconds in the current worktree (794 in the latest clean environment); compilation passes; the migrated database reports schema v6. The 2026-11-27 Doctor recheck reported only the missing WhatsApp token and trained wake model. Local Qwen benchmark/soak reports Ollama timings, model footprint, SHU data-volume free space, CPU/RAM and latency; a FIFO gate prevents Ollama and Whisper CPU overlap | Target-device RAM headroom, full hardware voice path, wake-word acceptance, complete threat-model run and physical power-loss test remain. |
+| 19. Release | Setup/startup/recovery tooling and a checked 2026-11-28 r18f personal source ZIP exist: 191 entries, 487,481 bytes, SHA-256 `5541d33a75df7cc710401f9e556d27023a94517753f854d5dca6243451b88ec9`, path/private-file/CRC/Python-syntax checks and byte-for-byte member comparison. The manifests pin 25 direct runtime dependencies; the r15 fresh venv and extracted source passed pip check, isolated schema-v5 init/verify, 747 tests in 95.68 seconds, a managed-browser smoke and offscreen dashboard launch. The corrected r18c extraction passed clean-environment tests and desktop/browser launch checks on this host. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain; hosted CI is still blocked by the account billing restriction. |
 
 ## External and hardware prerequisites
 
@@ -890,8 +920,8 @@ this as live acceptance or v1.0 completion.
 ## Resume point
 
 On resume, read the newest checkpoint at the top, inspect Git status and fetch
-`origin/main`. The r16/r17 changes and r18 frontend integration are published;
-`3a2e0a7` includes the verified missing-WebEngine hint and progress notes. Do not
+`origin/main`. The r18f checkpoint above is the latest implementation state; prior frontend,
+WebEngine and direct voice-control changes are already published. Do not
 restart those changes or repeat unchanged test suites just to recreate evidence.
 Continue with the remaining acceptance items in the phase rows. For templates,
 the next owner step is storing the Meta token, setting the optional business

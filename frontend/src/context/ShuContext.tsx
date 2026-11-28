@@ -19,6 +19,7 @@ import type {
   TranscriptEntry,
   WhatsAppContact,
   WorkflowItem,
+  SystemMetricsSnapshot,
 } from "../types/shu";
 import { DEFAULT_COLOR_THEME, getHoloColorTheme } from "../utils/colorTheme";
 import {
@@ -38,6 +39,7 @@ interface ShuContextValue {
   setActiveTab: (tab: ShuTab) => void;
   openRuntimeControls: (tab: string) => void;
   assistantState: AssistantState;
+  systemMetrics: SystemMetricsSnapshot | null;
   isListening: boolean;
   isMuted: boolean;
   voiceActivity: string;
@@ -285,6 +287,7 @@ export const ShuProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTab,
     openRuntimeControls: controls,
     assistantState: state.assistantState || "ready",
+    systemMetrics: state.systemMetrics || null,
     isListening: state.isListening || false,
     isMuted: state.isMuted || false,
     voiceActivity: state.voiceActivity || "Awaiting voice runtime",

@@ -88,6 +88,15 @@ export interface ShuSettings {
 
 export type BridgeConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
+export interface SystemMetricsSnapshot {
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  memoryUsedBytes: number | null;
+  memoryTotalBytes: number | null;
+  diskFreeBytes: number | null;
+  sampledAt: string | null;
+}
+
 export interface DuplicatePair {
   a: MemoryItem;
   b: MemoryItem;

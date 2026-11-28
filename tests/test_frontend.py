@@ -43,6 +43,12 @@ def test_frontend_reads_actual_memory(bridge):
     assert bridge.snapshot()["memories"][0]["id"] == record.memory_id
 
 
+def test_frontend_passes_through_measured_system_metrics(bridge, monkeypatch):
+    measured = {"cpuPercent": 12.5, "memoryPercent": 40, "diskFreeBytes": 1234}
+    monkeypatch.setattr(bridge.system_metrics, "read", lambda: measured)
+    assert json.loads(bridge.read())["systemMetrics"] == measured
+
+
 def test_frontend_stop_resume_reaches_controller(bridge):
     bridge.dispatch("stop", "{}")
     assert bridge.controller.emergency_stop.is_stopped

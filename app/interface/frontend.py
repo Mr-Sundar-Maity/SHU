@@ -21,6 +21,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from app.interface.dashboard import SHUDashboard
+from app.system_metrics import SystemMetrics
 
 DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
@@ -48,6 +49,7 @@ class DesktopBridge(QObject):
     def __init__(self, controller):
         super().__init__(controller)
         self.controller = controller
+        self.system_metrics = SystemMetrics(controller.settings.data_dir)
         self.entries = []
         self.entry_sequence = 0
         self.last_snapshot = ""
@@ -104,6 +106,7 @@ class DesktopBridge(QObject):
         return dict(
             transcript=self.entries,
             statusBanner=c.status.text(),
+            systemMetrics=self.system_metrics.read(),
             assistantState=assistant_state,
             isListening=c._voice_assistant is not None,
             isMuted=c._voice_muted,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import math
 import shutil
@@ -21,6 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.ai.ai_engine import SHUAIEngine
 from app.config import get_settings
 from app.cpu_work_queue import CPU_WORK_QUEUE
+from app.system_metrics import (
+    system_memory_snapshot,
+    system_cpu_snapshot,
+    cpu_percent as _cpu_percent,
+)
 
 _SOAK_MIN_AVAILABLE_MIB = 2_048
 
@@ -144,97 +148,6 @@ def _ollama_timing_report(samples: list[dict[str, float | None]]) -> dict[str, o
         )
         report[f"{label}_max"] = round(max(values), 6) if values else None
     return report
-
-
-def system_memory_snapshot() -> dict[str, int] | None:
-    """Capture Windows-wide physical-memory values without adding a dependency."""
-    if sys.platform != "win32":
-        return None
-
-    class MemoryStatusEx(ctypes.Structure):
-        _fields_ = [
-            ("dwLength", ctypes.c_ulong),
-            ("dwMemoryLoad", ctypes.c_ulong),
-            ("ullTotalPhys", ctypes.c_ulonglong),
-            ("ullAvailPhys", ctypes.c_ulonglong),
-            ("ullTotalPageFile", ctypes.c_ulonglong),
-            ("ullAvailPageFile", ctypes.c_ulonglong),
-            ("ullTotalVirtual", ctypes.c_ulonglong),
-            ("ullAvailVirtual", ctypes.c_ulonglong),
-            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-        ]
-
-    try:
-        status = MemoryStatusEx()
-        status.dwLength = ctypes.sizeof(status)
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(MemoryStatusEx)]
-        kernel32.GlobalMemoryStatusEx.restype = ctypes.c_int
-        if not kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-            return None
-        return {
-            "total_physical_bytes": int(status.ullTotalPhys),
-            "available_physical_bytes": int(status.ullAvailPhys),
-            "memory_load_percent": int(status.dwMemoryLoad),
-        }
-    except (AttributeError, OSError, TypeError, ValueError):
-        return None
-
-
-def system_cpu_snapshot() -> dict[str, int] | None:
-    """Capture cumulative Windows CPU times without adding a dependency."""
-    if sys.platform != "win32":
-        return None
-
-    class FileTime(ctypes.Structure):
-        _fields_ = [
-            ("dwLowDateTime", ctypes.c_uint32),
-            ("dwHighDateTime", ctypes.c_uint32),
-        ]
-
-        def as_int(self) -> int:
-            return (int(self.dwHighDateTime) << 32) | int(self.dwLowDateTime)
-
-    try:
-        idle = FileTime()
-        kernel = FileTime()
-        user = FileTime()
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.GetSystemTimes.argtypes = [
-            ctypes.POINTER(FileTime),
-            ctypes.POINTER(FileTime),
-            ctypes.POINTER(FileTime),
-        ]
-        kernel32.GetSystemTimes.restype = ctypes.c_int
-        if not kernel32.GetSystemTimes(
-            ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)
-        ):
-            return None
-        return {
-            "idle": idle.as_int(),
-            "kernel": kernel.as_int(),
-            "user": user.as_int(),
-        }
-    except (AttributeError, OSError, TypeError, ValueError):
-        return None
-
-
-def _cpu_percent(
-    before: dict[str, int] | None, after: dict[str, int] | None
-) -> float | None:
-    """Return whole-system non-idle CPU percentage between two snapshots."""
-    if before is None or after is None:
-        return None
-    idle_delta = after["idle"] - before["idle"]
-    kernel_delta = after["kernel"] - before["kernel"]
-    user_delta = after["user"] - before["user"]
-    total_delta = kernel_delta + user_delta
-    if idle_delta < 0 or kernel_delta < 0 or user_delta < 0 or total_delta <= 0:
-        return None
-    busy_delta = total_delta - idle_delta
-    if busy_delta < 0 or busy_delta > total_delta:
-        return None
-    return busy_delta * 100.0 / total_delta
 
 
 def _cpu_report(samples: list[float]) -> dict[str, object]:
