@@ -40,6 +40,12 @@ interface ShuContextValue {
   assistantState: AssistantState;
   isListening: boolean;
   isMuted: boolean;
+  voiceActivity: string;
+  speechPaused: boolean;
+  canPauseSpeech: boolean;
+  canPlanVoice: boolean;
+  toggleSpeechPause: () => void;
+  planLastVoiceRequest: () => void;
   isUserSpeaking: boolean;
   audioLevel: number;
   audioAnalyser: AnalyserNode | null;
@@ -281,6 +287,12 @@ export const ShuProvider: React.FC<{ children: React.ReactNode }> = ({
     assistantState: state.assistantState || "ready",
     isListening: state.isListening || false,
     isMuted: state.isMuted || false,
+    voiceActivity: state.voiceActivity || "Awaiting voice runtime",
+    speechPaused: state.speechPaused || false,
+    canPauseSpeech: state.canPauseSpeech || false,
+    canPlanVoice: state.canPlanVoice || false,
+    toggleSpeechPause: () => request("pause_speech"),
+    planLastVoiceRequest: () => request("plan_voice"),
     isUserSpeaking: false,
     audioLevel: 0,
     audioAnalyser: null,

@@ -1,6 +1,7 @@
 """Frontend bridge uses isolated data and the existing policy controller."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -68,6 +69,95 @@ def test_editing_draft_invalidates_review(bridge):
     bridge.controller._active_message_draft_id = "fixture"
     bridge.dispatch("invalidate_draft", "{}")
     assert bridge.controller._active_message_draft_id is None
+
+
+def test_voice_pause_and_resume_reach_playback_without_recording(bridge):
+    calls = []
+    controller = bridge.controller
+    controller._voice_assistant = SimpleNamespace(
+        tts=SimpleNamespace(
+            pause=lambda: calls.append("pause"), resume=lambda: calls.append("resume")
+        )
+    )
+    controller._voice_stage = "speech_output"
+    controller.voice_pause_button.setEnabled(True)
+    try:
+        bridge.dispatch("pause_speech", "{}")
+        state = bridge.snapshot()
+        assert calls == ["pause"]
+        assert state["speechPaused"] is True
+        assert state["voiceActivity"] == "Speech paused"
+        bridge.dispatch("pause_speech", "{}")
+        assert calls == ["pause", "resume"]
+        assert not bridge.snapshot()["speechPaused"]
+    finally:
+        controller._voice_assistant = None
+
+
+@pytest.mark.parametrize(
+    "blocked_by", ["active_voice", "automation", "stop", "task_busy", "no_request"]
+)
+def test_voice_plan_requires_an_eligible_finished_session(
+    bridge, monkeypatch, blocked_by
+):
+    controller = bridge.controller
+    controller.registry.set_automation_enabled(True)
+    controller._last_voice_request = "Synthetic voice request"
+    if blocked_by == "active_voice":
+        controller._voice_assistant = object()
+    if blocked_by == "automation":
+        controller.registry.set_automation_enabled(False)
+    if blocked_by == "stop":
+        controller.emergency_stop.trigger()
+    if blocked_by == "task_busy":
+        controller._task_busy = True
+    if blocked_by == "no_request":
+        controller._last_voice_request = None
+    controller._update_voice_plan_button()
+    monkeypatch.setattr(
+        controller,
+        "_request_task_plan",
+        lambda *a, **k: pytest.fail("Planning must remain blocked"),
+    )
+    try:
+        assert not bridge.snapshot()["canPlanVoice"]
+        bridge.dispatch("plan_voice", "{}")
+        assert controller.status.text().startswith("Action failed:")
+    finally:
+        controller._voice_assistant = None
+        controller._task_busy = False
+
+
+def test_voice_plan_uses_original_recognized_text(bridge, monkeypatch):
+    controller = bridge.controller
+    controller.registry.set_automation_enabled(True)
+    controller._last_voice_request = "Synthetic original voice request"
+    controller._update_voice_plan_button()
+    requests = []
+    monkeypatch.setattr(
+        controller,
+        "_request_task_plan",
+        lambda request, **kwargs: requests.append((request, kwargs)),
+    )
+    assert bridge.snapshot()["canPlanVoice"]
+    bridge.dispatch(
+        "plan_voice", json.dumps({"text": "Must not replace recognized request"})
+    )
+    assert requests == [("Synthetic original voice request", {"from_voice": True})]
+
+
+def test_idle_voice_controls_do_not_start_capture_or_planning(bridge, monkeypatch):
+    monkeypatch.setattr(
+        bridge.controller,
+        "_toggle_voice_pause",
+        lambda: pytest.fail("No speech session"),
+    )
+    state = bridge.snapshot()
+    assert not state["canPauseSpeech"]
+    assert not state["canPlanVoice"]
+    bridge.dispatch("pause_speech", "{}")
+    assert bridge.controller._voice_assistant is None
+    assert not bridge.controller._threads
 
 
 @pytest.mark.parametrize("approved", [False, True])

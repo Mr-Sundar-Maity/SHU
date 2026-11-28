@@ -155,6 +155,13 @@ returns SHU to Ready. The **Voice activity** line distinguishes recording,
 transcription, AI processing and speech output. It also shows microphone mute
 and whether voice interruptions are enabled during speech output.
 
+The React **Voice engine** card displays that live activity and provides
+**Pause speech / Resume speech** for the current voice session. After the voice
+session ends, **Plan last voice request** submits its original recognized text
+to the existing reviewed task-planning flow. That action stays disabled during
+an active voice session or task, when automation is disabled, and after Emergency
+stop. It does not execute a plan without the normal approval.
+
 In Settings, **Detect spoken language automatically** enables language detection
 for the next voice session. It is off by default and lasts only for the current
 app session. When it is off, recognition uses **Default voice language**.

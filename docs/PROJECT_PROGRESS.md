@@ -11,8 +11,8 @@ replace the requirement-level evidence in [PRD_TRACEABILITY.md](PRD_TRACEABILITY
 or the delivery summary in [STATUS.md](STATUS.md).
 
 The latest clean-environment pytest run passed **794 tests in 104.82 seconds**;
-the current worktree, including the r18d accessibility regression, passes **795
-tests in 108.14 seconds**. Python compilation passed. The configured database is at schema version 6 and reports
+the current worktree, including the r18e voice controls, passes **803
+tests in 98.44 seconds**. Python compilation passed. The configured database is at schema version 6 and reports
 `Integrity: ok`; its private-data ACL check passed. The r15 live checks remain
 current: Ollama answered a fixed synthetic prompt, Gmail passed read-only OAuth
 verification, and direct Gemini generation still returned HTTP 503 after 75.078
@@ -103,6 +103,32 @@ and trained `Hey SHU` model.
 - Final r18c archive comparison: all 189 members match the corrected clean
   source copy byte-for-byte. Its three generated frontend build files also
   match the working checkout. The frontend README hash remains unchanged.
+
+### Direct React voice controls (r18e)
+
+- The default dashboard's Voice engine card now shows the native activity label,
+  including recording, transcription, speech output and mute state. It exposes
+  Pause/Resume speech and Plan last voice request without opening another window.
+- The bridge calls the existing native handlers. Idle speech controls cannot
+  invoke playback; voice planning requires a completed session and is blocked
+  while a voice session/task is active, automation is off, or Emergency stop is
+  active. Planning uses the original recognized request, ignoring replacement
+  text supplied by a frontend payload. Existing exact-step approval remains.
+- Verification: 82 focused bridge/dashboard tests and the full **803-test suite
+  passed (98.44 s)**; TypeScript and production build passed. A rendered Qt/React
+  smoke clicked the real buttons against injected playback/planning callbacks,
+  verifying idle gates, pause/resume and the original-request handoff. No audio
+  was recorded, no provider was called, and no desktop task was executed. The
+  screenshot was inspected; hardware audio and screen-reader acceptance remain.
+- The r18d native-template and React-entry accessibility work is preserved.
+  `frontend/README.md` retains its original hash. Resume with the remaining PRD
+  acceptance items; do not count these injected tests as owner microphone tests.
+- Personal source bundle `dist/SHU_personal_source_2026-11-28_r18e.zip` has
+  189 entries (484,260 bytes), SHA-256
+  `a7da95adb38ca842f31d6c8812fe1a35686323a810b69d26d89e4eecdc52065c`.
+  Path, private-file, CRC and Python-syntax checks passed; every member matches
+  the checkout byte-for-byte. No new clean-environment install was needed for
+  these unchanged dependencies; the most recent clean-install evidence is r18c.
 
 ### Accessibility pass (r18d, native WhatsApp template fields)
 
@@ -835,8 +861,8 @@ this as live acceptance or v1.0 completion.
 | 15. Task planner | Validation, FIFO queue, checkpoints, approval binding and crash recovery implemented; duration estimates use measured medians after three successful samples; registered read-only tools can use up to two transient-only retries with exponential backoff and an interruptible emergency-stop wait; local-Qwen plan-to-isolated-queue/preview smoke passed with cloud and automation disabled; isolated read-only `list_windows` target execution completed and drained the FIFO queue, with titles/results suppressed; focused retry/browser/stop suite passes 81 tests. Crash recovery prioritizes persisted in-flight state and resume claims bind the verified checkpoint. Subprocess and concurrent resume regressions pass. Resume and recovery approvals now bind the complete reviewed snapshot to the SQLite write. New Windows runner claims persist the process creation time so reused PIDs cannot prevent recovery. Legacy and unreadable live identities retain manual uncertainty. | Registered resource labels identify required tool capabilities and aggregate per task; they do not claim live CPU/RAM capacity. Modifying target-app workflows and physical power-loss recovery remain. |
 | 16. Email | Gmail OAuth, search/read and confirmed draft/send paths implemented. CLI reply and forward approvals bind the recipient, subject and delivery mode. Changes are rejected before a provider write. Outlook reply tests check one reviewed To address and empty Cc/Bcc on the returned draft before send. Dashboard send and provider-draft dialogs display literal text and attachment details and decline stale approval. Provider-draft saves and direct sends now require a usable provider reference and block replay of uncertain actions. Provider-native replies and forwards now commit an approval claim before a write and block identical retries after confirmed or uncertain outcomes. | Broader Gmail reply/forward/attachment/send acceptance; Outlook registration/consent remains unverified. The verified draft routing still requires a live Outlook acceptance check. |
 | 17. Dashboard | Voice, task, memory, reminder, communication (text and WhatsApp template composition), Cloud AI and automation controls implemented, including six response-style modes and a post-session voice request planner handoff with exact-step preview and approval; dashboard text size is adjustable from 8–24 points. The conversation transcript displays literal text and line breaks. Voice stop and queued Quiet mode have offscreen regression coverage. Offscreen shutdown tests confirm responsive closing with two active Qt workers and no new work. Offscreen tests verify time zone persistence and exact, plain-text communication confirmations. A labelled Voice activity line distinguishes capture, processing and speech output and preserves the mute indicator. The SHU menu can create a verified SQLite backup on a worker thread without rotating earlier backups. The reminder list surfaces uncertain delivery separately from pending and permits explicit rescheduling. Dashboard Emergency Stop cancels the active chat and suppresses a late response. A fresh request has independent cancellation. Offscreen workflow controls passed a five-dialog keyboard test using one synthetic task. | Target-desktop keyboard/screen-reader acceptance and full interactive/provider acceptance remain. |
-| 18. Hardening | Latest full pytest run: 795 tests in 108.14 seconds in the current worktree (794 in the latest clean environment); compilation passes; the migrated database reports schema v6. The 2026-11-27 Doctor recheck reported only the missing WhatsApp token and trained wake model. Local Qwen benchmark/soak reports Ollama timings, model footprint, SHU data-volume free space, CPU/RAM and latency; a FIFO gate prevents Ollama and Whisper CPU overlap | Target-device RAM headroom, full hardware voice path, wake-word acceptance, complete threat-model run and physical power-loss test remain. |
-| 19. Release | Setup/startup/recovery tooling and a checked 2026-11-28 r18d personal source ZIP exist: 189 entries, 482,930 bytes, SHA-256 `d8aab2af457a9741330ff8feb2351aa51cd2e52966a6dc9c90e8121e099de275`, path/private-file/CRC/Python-syntax checks and byte-for-byte member comparison. The manifests pin 25 direct runtime dependencies; the r15 fresh venv and extracted source passed pip check, isolated schema-v5 init/verify, 747 tests in 95.68 seconds, a managed-browser smoke and offscreen dashboard launch. The corrected r18c extraction passed clean-environment tests and desktop/browser launch checks on this host. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain; hosted CI is still blocked by the account billing restriction. |
+| 18. Hardening | Latest full pytest run: 803 tests in 98.44 seconds in the current worktree (794 in the latest clean environment); compilation passes; the migrated database reports schema v6. The 2026-11-27 Doctor recheck reported only the missing WhatsApp token and trained wake model. Local Qwen benchmark/soak reports Ollama timings, model footprint, SHU data-volume free space, CPU/RAM and latency; a FIFO gate prevents Ollama and Whisper CPU overlap | Target-device RAM headroom, full hardware voice path, wake-word acceptance, complete threat-model run and physical power-loss test remain. |
+| 19. Release | Setup/startup/recovery tooling and a checked 2026-11-28 r18e personal source ZIP exist: 189 entries, 484,260 bytes, SHA-256 `a7da95adb38ca842f31d6c8812fe1a35686323a810b69d26d89e4eecdc52065c`, path/private-file/CRC/Python-syntax checks and byte-for-byte member comparison. The manifests pin 25 direct runtime dependencies; the r15 fresh venv and extracted source passed pip check, isolated schema-v5 init/verify, 747 tests in 95.68 seconds, a managed-browser smoke and offscreen dashboard launch. The corrected r18c extraction passed clean-environment tests and desktop/browser launch checks on this host. GitHub Windows CI installs pinned dependencies and runs offline tests with a separate database. See GitHub Actions for hosted execution. | A signed binary installer, another-profile/machine acceptance and future redistribution/license review remain; hosted CI is still blocked by the account billing restriction. |
 
 ## External and hardware prerequisites
 

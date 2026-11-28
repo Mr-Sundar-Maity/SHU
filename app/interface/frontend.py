@@ -107,6 +107,10 @@ class DesktopBridge(QObject):
             assistantState=assistant_state,
             isListening=c._voice_assistant is not None,
             isMuted=c._voice_muted,
+            voiceActivity=c.voice_activity.text(),
+            speechPaused=c._voice_speech_paused,
+            canPauseSpeech=c.voice_pause_button.isEnabled(),
+            canPlanVoice=c.plan_voice_button.isEnabled(),
             quietMode=c.quiet_mode.isChecked(),
             memories=[
                 dict(
@@ -181,6 +185,8 @@ class DesktopBridge(QObject):
                 "mute": c._toggle_voice_mute,
                 "listen": c._start_voice,
                 "stop_voice": c._stop_active_voice,
+                "pause_speech": c._toggle_voice_pause,
+                "plan_voice": c._plan_last_voice_request,
                 "diagnostics": c._show_diagnostics,
                 "reset": c._reset_conversation,
                 "memory_add": c._add_memory,
@@ -246,6 +252,10 @@ class DesktopBridge(QObject):
                 ):
                     c.contacts.delete(record.contact_id, confirmed=True)
             elif action in simple:
+                if action == "pause_speech" and not c.voice_pause_button.isEnabled():
+                    raise ValueError("No active speech session")
+                if action == "plan_voice" and not c.plan_voice_button.isEnabled():
+                    raise ValueError("No eligible voice request to plan")
                 if action == "send" and not c.send_message_button.isEnabled():
                     raise ValueError("Sending requires a fresh reviewed draft")
                 if (
