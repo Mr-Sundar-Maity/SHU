@@ -129,6 +129,12 @@ and trained `Hey SHU` model.
   Path, private-file, CRC and Python-syntax checks passed; every member matches
   the checkout byte-for-byte. No new clean-environment install was needed for
   these unchanged dependencies; the most recent clean-install evidence is r18c.
+- Publication: `602fa5e` pushed these changes and both preceding accessibility
+  commits to GitHub main. Run
+  [46101771452](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/46101771452)
+  ended before any job step because GitHub reports the account is locked due
+  to a billing issue. Hosted verification remains pending; no billing settings
+  were changed.
 
 ### Accessibility pass (r18d, native WhatsApp template fields)
 
