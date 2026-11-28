@@ -50,6 +50,11 @@ and trained `Hey SHU` model.
 - Resume after this checkpoint: complete the external and target-hardware
   acceptance listed in the phase rows. The 19-phase v1 acceptance remains open;
   this host's measurements do not establish the exact 16 GB target baseline.
+- Publication: `f757cfc` was pushed to `Mr-Sundar-Maity/SHU` main. Hosted run
+  [46102769317](https://github.com/Mr-Sundar-Maity/SHU/actions/runs/46102769317),
+  job `140848723813`, ended before any step: GitHub reports that the account is
+  locked due to a billing issue. No hosted tests executed. Local evidence above
+  remains separate; no billing settings were changed.
 
 ## Earlier checkpoint on 2026-11-28 (r18, frontend integration)
 
